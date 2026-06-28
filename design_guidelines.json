@@ -1,0 +1,116 @@
+{
+  "theme": "Light",
+  "archetype": "Swiss & High-Contrast",
+  "brand_name": "EduManage",
+  "domain": "Coaching Class Management",
+  "colors": {
+    "primary": "#003fb1",
+    "primary_container": "#1a56db",
+    "secondary": "#566068",
+    "tertiary": "#852b00",
+    "surface": "#faf8ff",
+    "on_surface": "#191b23",
+    "outline_variant": "#c3c5d7",
+    "error": "#ba1a1a",
+    "success": "#16a34a",
+    "status": {
+      "success_bg": "rgba(22, 163, 74, 0.1)",
+      "error_bg": "rgba(186, 26, 26, 0.15)"
+    }
+  },
+  "typography": {
+    "font_families": {
+      "heading": "'Work Sans', sans-serif",
+      "body": "'Work Sans', sans-serif",
+      "mono": "'Work Sans', sans-serif"
+    },
+    "scales": {
+      "headline_lg": "text-[24px] font-[700] leading-tight",
+      "headline_md": "text-[20px] font-[600] leading-snug",
+      "body_lg": "text-[16px] font-[400] leading-relaxed",
+      "body_md": "text-[14px] font-[400] leading-relaxed",
+      "label_md": "text-[12px] font-[600] uppercase tracking-wider",
+      "data_mono": "text-[14px] font-[500] tabular-nums"
+    }
+  },
+  "spacing": {
+    "grid_system": "8pt base",
+    "scales": {
+      "xs": "4px",
+      "sm": "8px",
+      "md": "16px",
+      "lg": "24px",
+      "xl": "32px"
+    },
+    "container": {
+      "margin": "20px"
+    }
+  },
+  "shapes": {
+    "button_radius": "4px",
+    "input_radius": "4px",
+    "card_radius": "8px",
+    "chip_radius": "9999px"
+  },
+  "layout": {
+    "strategy": "Mobile-first SaaS Dashboard",
+    "mobile": {
+      "navigation": "Bottom Navigation Bar",
+      "header": "TopAppBar",
+      "padding": "p-5"
+    },
+    "desktop": {
+      "navigation": "Sidebar Navigation",
+      "header": "Top Sticky Header",
+      "grid": "grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6"
+    }
+  },
+  "components": {
+    "cards": {
+      "background": "bg-[#faf8ff]",
+      "border": "border border-[#c3c5d7]",
+      "radius": "rounded-[8px]",
+      "shadow": "shadow-sm",
+      "padding": "p-4 sm:p-6"
+    },
+    "buttons": {
+      "primary": "bg-[#003fb1] text-white rounded-[4px] hover:bg-[#1a56db] transition-colors",
+      "secondary": "bg-[#faf8ff] text-[#003fb1] border border-[#c3c5d7] rounded-[4px] hover:bg-gray-50 transition-colors"
+    },
+    "inputs": {
+      "style": "border border-[#c3c5d7] rounded-[4px] bg-white focus:border-[#003fb1] focus:ring-1 focus:ring-[#003fb1] outline-none transition-all p-2 text-[16px]"
+    },
+    "status_chips": {
+      "success": "bg-[rgba(22,163,74,0.1)] text-[#16a34a] rounded-full px-3 py-1 text-[12px] font-[600] uppercase",
+      "error": "bg-[rgba(186,26,26,0.15)] text-[#ba1a1a] rounded-full px-3 py-1 text-[12px] font-[600] uppercase"
+    }
+  },
+  "motion": {
+    "hover": "transition-all duration-200 ease-in-out",
+    "click": "active:scale-[0.98]"
+  },
+  "accessibility": {
+    "contrast": "Ensure text over surface (#faf8ff) meets WCAG AA standards.",
+    "focus": "focus-visible:ring-2 focus-visible:ring-[#003fb1] focus-visible:outline-none"
+  },
+  "assets": {
+    "currency": "INR (₹)",
+    "icons_library": "lucide-react"
+  },
+  "image_urls": [
+    {
+      "url": "https://images.pexels.com/photos/19037688/pexels-photo-19037688.jpeg",
+      "category": "empty_state",
+      "description": "Modern classroom interior with desks and chairs, showcasing clean design and ample natural light."
+    }
+  ],
+  "instructions_to_main_agent": [
+    "Strictly follow the color hex codes and Work Sans typography scale provided.",
+    "Implement pure HTML/Tailwind and customize Shadcn components to override their default radii (use 4px for inputs/buttons, 8px for cards).",
+    "Ensure 'data-testid' attributes on all interactive and key informational elements (e.g. data-testid=\"login-submit-button\").",
+    "Build a responsive layout: bottom navigation bar for mobile (< 768px), and a permanent sidebar for desktop view.",
+    "Use 'lucide-react' for all icons.",
+    "Currency must always be formatted as INR (₹).",
+    "Implement daily and batch-wise attendance UI using the Status Chips for Present/Absent states."
+  ]
+}
