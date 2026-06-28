@@ -664,14 +664,21 @@ async def shutdown():
 
 
 # ---------- Mount routers + CORS ----------
-app.include_router(auth_router)
-app.include_router(api)
-
-frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+# ---------- Mount routers + CORS ----------
+# CORS must accept both preview (*.preview.emergentagent.com) and production (*.emergent.host)
+# domains since the frontend can be served from either. With allow_credentials=True we cannot
+# use "*", so we use a regex that matches all valid emergent domains plus localhost.
+cors_origin_regex = os.environ.get(
+    "CORS_ORIGIN_REGEX",
+    r"https?://(localhost(:\d+)?|.*\.emergent\.host|.*\.emergentagent\.com)",
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[frontend_url, "http://localhost:3000"],
+    allow_origin_regex=cors_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(auth_router)
+app.include_router(api)

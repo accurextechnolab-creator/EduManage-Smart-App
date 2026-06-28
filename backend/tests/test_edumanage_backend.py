@@ -46,6 +46,83 @@ def secondary_client(secondary_user):
     return s
 
 
+# Direct backend URL used for CORS preflight tests because the public ingress
+# may rewrite OPTIONS responses. CORS middleware behavior must be tested at the
+# FastAPI layer where the bug fix lives.
+DIRECT_BACKEND = "http://localhost:8001"
+PROD_ORIGIN = "https://student-track-49.emergent.host"
+PREVIEW_ORIGIN = "https://student-track-49.preview.emergentagent.com"
+
+
+# ---------- CORS bug-fix verification ----------
+class TestCORS:
+    """Verify CORS preflight + credentials for emergent.host and preview origins.
+
+    Reproduces the production deploy failure: OPTIONS /api/auth/login was returning
+    400 from the emergent.host origin. After the allow_origin_regex fix, both
+    origins must succeed.
+    """
+
+    @pytest.mark.parametrize("origin", [PROD_ORIGIN, PREVIEW_ORIGIN])
+    def test_preflight_login(self, origin):
+        r = requests.options(
+            f"{DIRECT_BACKEND}/api/auth/login",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        assert r.status_code == 200, f"Preflight from {origin} returned {r.status_code}"
+        assert r.headers.get("access-control-allow-origin") == origin
+        assert r.headers.get("access-control-allow-credentials") == "true"
+        assert "POST" in r.headers.get("access-control-allow-methods", "")
+
+    def test_preflight_disallowed_origin(self):
+        r = requests.options(
+            f"{DIRECT_BACKEND}/api/auth/login",
+            headers={
+                "Origin": "https://evil.example.com",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        # Starlette returns 400 for disallowed CORS preflight and does NOT
+        # include access-control-allow-origin (browser will block).
+        assert "access-control-allow-origin" not in {k.lower() for k in r.headers}
+
+    def test_login_from_prod_origin_sets_cookie_and_cors(self):
+        r = requests.post(
+            f"{DIRECT_BACKEND}/api/auth/login",
+            headers={"Origin": PROD_ORIGIN, "Content-Type": "application/json"},
+            json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
+        )
+        assert r.status_code == 200
+        assert r.headers.get("access-control-allow-origin") == PROD_ORIGIN
+        assert r.headers.get("access-control-allow-credentials") == "true"
+        cookie = r.headers.get("set-cookie", "")
+        assert "access_token=" in cookie
+        assert "HttpOnly" in cookie
+        assert "Secure" in cookie
+        assert "SameSite=none" in cookie or "samesite=none" in cookie.lower()
+
+    def test_me_with_bearer_from_prod_origin(self):
+        login = requests.post(
+            f"{DIRECT_BACKEND}/api/auth/login",
+            headers={"Origin": PROD_ORIGIN, "Content-Type": "application/json"},
+            json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
+        )
+        token = login.json()["token"]
+        r = requests.get(
+            f"{DIRECT_BACKEND}/api/auth/me",
+            headers={"Origin": PROD_ORIGIN, "Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200, f"/auth/me returned {r.status_code}: {r.text}"
+        assert r.headers.get("access-control-allow-origin") == PROD_ORIGIN
+        assert r.headers.get("access-control-allow-credentials") == "true"
+        assert r.json()["email"] == ADMIN_EMAIL
+
+
 # ---------- Health ----------
 class TestHealth:
     def test_root(self):

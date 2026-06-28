@@ -1,0 +1,33 @@
+{
+  "summary": "Iteration 2 — CORS production-domain bug-fix verification. Added 5 new CORS tests to the existing pytest suite. All 25 backend tests pass (20 regression + 5 new CORS). Backend direct (localhost:8001) verified: OPTIONS /api/auth/login returns 200 with access-control-allow-origin echoed for BOTH https://student-track-49.emergent.host and https://student-track-49.preview.emergentagent.com; access-control-allow-credentials:true; POST /api/auth/login from prod origin returns Set-Cookie access_token=...; HttpOnly; SameSite=none; Secure; GET /api/auth/me with Bearer token from prod origin returns 200 with proper CORS headers. Disallowed origins (e.g. evil.example.com) are rejected (no allow-origin header). Frontend smoke test via preview URL: login -> dashboard renders 4 stat cards, sidebar nav (Dashboard/Batches/Finance/Reports), user info (Demo Teacher / admin@edumanage.app), Logout visible. No regressions.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_edumanage_backend.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Note: the public preview ingress (student-track-49.preview.emergentagent.com) intercepts OPTIONS and returns 'access-control-allow-origin: *' for all origins, bypassing FastAPI CORS. This is fine because the K8s ingress *.preview.emergentagent.com is preview-only; the production *.emergent.host ingress is expected to pass OPTIONS through to FastAPI where the new allow_origin_regex correctly handles it. CORS tests therefore hit localhost:8001 directly (the layer that actually contains the fix).",
+    "Stale comment / duplicate header in server.py around line 666-668 (two identical '# ---------- Mount routers + CORS ----------' comment lines).",
+    "Optional hardening: lock allow_methods / allow_headers to an explicit list rather than '*' once API surface is final.",
+    "Carryover from iteration 1: ObjectId() on malformed IDs still raises bson InvalidId -> 500; consider wrapping with try/except -> 404."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_edumanage_backend.py (added TestCORS class with 5 tests)"
+  ],
+  "success_rate": {"backend": "100% (25/25)", "frontend": "100% (login + dashboard verified)"},
+  "test_credentials": "admin@edumanage.app / admin123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Tests create+cleanup TEST_* batches/students/expenses; secondary test user (test_user_*@edumanage-example.com) is reused.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend pytest at /app/backend/tests/test_edumanage_backend.py contains 25 tests including TestCORS class. Run: pytest /app/backend/tests/ -v --junitxml=/app/test_reports/pytest/pytest_results.xml. CORS tests deliberately hit http://localhost:8001 directly because the preview ingress overrides CORS headers; the prod *.emergent.host ingress should preserve them. To curl-verify CORS directly: curl -X OPTIONS -H 'Origin: https://student-track-49.emergent.host' -H 'Access-Control-Request-Method: POST' http://localhost:8001/api/auth/login -i",
+  "rca_of_the_issue": "Original bug: server.py used CORSMiddleware(allow_origins=[FRONTEND_URL, 'http://localhost:3000']) hardcoded to the preview URL. Requests from the production URL https://student-track-49.emergent.host did not match the whitelist, so Starlette's CORS middleware returned 400 on OPTIONS preflight and omitted access-control-allow-origin on regular responses (causing /auth/me to look like 401 to the browser even though the JWT was valid). Fix: switched to allow_origin_regex defaulting to r'https?://(localhost(:\\d+)?|.*\\.emergent\\.host|.*\\.emergentagent\\.com)' which matches both preview and production hosts plus localhost, keeping allow_credentials=true so cookies still flow cross-site. Verified end-to-end via curl + pytest."
+}
