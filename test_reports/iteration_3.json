@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration 3 — P1 (inline edit batches & students, mark-all-present, student profile page) and P2 (WhatsApp reminder on Finance + Profile) features verified end-to-end. Backend: 32/32 pytest tests pass (25 regression + 7 new for GET/PUT student, history math, and cross-user 404 ownership). Frontend: all 7 new flows verified via Playwright on the live preview URL.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_edumanage_backend.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "ObjectId(unknown_id) still raises bson InvalidId -> 500 (e.g. GET /api/students/not-a-real-id). Wrap with try/except -> 404 for defensive UX. Carryover from iter 1.",
+    "Frontend Profile page: window.open is invoked twice on first load (first call passes undefined, second passes the correct URL). Likely a duplicate handler or a useEffect-triggered open. Worth auditing StudentProfile.jsx + Finance.jsx to ensure window.open is only called on user gesture (clicking the WA button). Functional impact is nil because the second call carries the real URL.",
+    "Stale comment / duplicate '# ---------- Mount routers + CORS ----------' header in server.py (~line 717) — carryover.",
+    "Optional hardening: lock CORS allow_methods / allow_headers to an explicit list once API surface is finalized — carryover.",
+    "Add an Authorization-aware 404 vs 403 distinction: currently require_owner returns 404 for both 'doesn't exist' and 'owned by another user', which the iter-3 spec actually relies on. Keep as-is unless API consumers need a 403."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_edumanage_backend.py (added TestStudentProfileEndpoints class — 7 new tests)"
+  ],
+  "success_rate": { "backend": "100% (32/32)", "frontend": "100% (all P1/P2 + regression flows verified)" },
+  "test_credentials": "admin@edumanage.app / admin123 (from /app/memory/test_credentials.md). Secondary user auto-registered in tests.",
+  "seed_data_creation": "Backend tests create+cleanup TEST_* batches/students/expenses (cascade delete on batch). Frontend test left a TEST_UI_Batch_edited batch and one TEST_UI_Stud student in admin's account for manual re-inspection.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Pytest suite at /app/backend/tests/test_edumanage_backend.py now has 32 tests across TestCORS, TestHealth, TestAuth, TestProtected, TestBatches, TestIsolation, TestStudents, TestAttendance, TestFees, TestExpenses, TestDashboard, TestStudentProfileEndpoints, TestReports. Run: pytest /app/backend/tests/ -v --junitxml=/app/test_reports/pytest/pytest_results.xml. The student history endpoint computes percent = round(present/(present+absent)*100) — verified with the 3P+1A=75% case. For WA URL inspection in playwright, override window.open BEFORE the click; the array will contain a leading 'null' from a prior page-level open (Emergent badge or similar), so check the LAST element, not [0]. Iteration 3 P1/P2 verified on https://student-track-49.preview.emergentagent.com.",
+  "verified_p1_p2_flows": {
+    "batch_edit_inline": "batch-edit-{id} opens modal pre-filled with batch values; submit persists changes; card reflects new name+fee immediately.",
+    "student_edit_inline": "student-edit-{id} opens modal pre-filled with name='TEST_UI_Stud' parent_phone='9876543210'; fee update to 2750 persisted (visible in Finance Expected ₹2,750).",
+    "mark_all_present": "mark-all-present-btn visible only when students.length>0 on Attendance tab; clicking activates pill-active-present on every student; save-attendance-btn persists.",
+    "student_profile_page": "/students/{id} renders. stat-attendance-percent shows '100%' after 1 present mark (matches backend percent math).",
+    "profile_whatsapp": "student-whatsapp-btn opens https://wa.me/919876543210?text=... with student name and batch name encoded.",
+    "finance_whatsapp": "fee-whatsapp-{id} on unpaid row opens https://wa.me/919876543210?text=... including student name, expected fee (₹2750), and full month name 'June 2026'."
+  },
+  "rca_of_the_issue": "N/A — iteration 3 is a feature add, not a bug fix. All new endpoints and UI flows pass tests on first run."
+}

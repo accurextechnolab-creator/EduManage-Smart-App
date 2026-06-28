@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { ArrowLeft, Plus, X, Save, Search, UserPlus, Trash2 } from "lucide-react";
+import { ArrowLeft, Plus, X, Save, Search, UserPlus, Trash2, Pencil, CheckSquare, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { api, formatApiError, todayISO } from "@/lib/api";
 import Layout from "@/components/Layout";
 import { Initials, Loading } from "@/components/ui-edu";
+
+const blankStudent = { name: "", student_code: "", phone: "", parent_name: "", parent_phone: "", monthly_fee: 0 };
 
 export default function BatchDetail() {
   const { id } = useParams();
@@ -13,8 +15,7 @@ export default function BatchDetail() {
   const [students, setStudents] = useState([]);
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState("attendance");
-  const [addOpen, setAddOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", student_code: "", phone: "", parent_name: "", parent_phone: "" });
+  const [modal, setModal] = useState(null); // null | { mode: 'add' | 'edit', id?, ...form }
   const [saving, setSaving] = useState(false);
 
   const loadBatch = async () => {
@@ -27,11 +28,10 @@ export default function BatchDetail() {
   };
   const loadStudents = async () => {
     const { data } = await api.get(`/batches/${id}/students`);
-    // map them to a compatible structure (status undefined)
     setStudents(data.map((s) => ({ ...s, status: undefined })));
   };
 
-  useEffect(() => { loadBatch(); }, [id]);
+  useEffect(() => { loadBatch(); /* eslint-disable-next-line */ }, [id]);
   useEffect(() => {
     if (tab === "attendance") loadAttendance();
     else loadStudents();
@@ -45,6 +45,17 @@ export default function BatchDetail() {
 
   const setStatus = (sid, status) => {
     setStudents((prev) => prev.map((s) => (s.id === sid ? { ...s, status } : s)));
+  };
+
+  const markAllPresent = () => {
+    if (students.length === 0) return;
+    setStudents((prev) => prev.map((s) => ({ ...s, status: s.status === "absent" ? s.status : "present" })));
+    toast.info("All marked present. Toggle absentees, then Save.");
+  };
+
+  const markAllAbsent = () => {
+    if (students.length === 0) return;
+    setStudents((prev) => prev.map((s) => ({ ...s, status: "absent" })));
   };
 
   const saveAttendance = async () => {
@@ -64,13 +75,30 @@ export default function BatchDetail() {
     setSaving(false);
   };
 
-  const addStudent = async (e) => {
+  const openAdd = () => setModal({ mode: "add", ...blankStudent });
+  const openEdit = (s) => setModal({
+    mode: "edit", id: s.id,
+    name: s.name || "", student_code: s.student_code || "", phone: s.phone || "",
+    parent_name: s.parent_name || "", parent_phone: s.parent_phone || "",
+    monthly_fee: s.monthly_fee || 0,
+  });
+
+  const submitStudent = async (e) => {
     e.preventDefault();
+    const payload = {
+      name: modal.name, student_code: modal.student_code, phone: modal.phone,
+      parent_name: modal.parent_name, parent_phone: modal.parent_phone,
+      monthly_fee: Number(modal.monthly_fee) || 0,
+    };
     try {
-      await api.post(`/batches/${id}/students`, form);
-      toast.success("Student added");
-      setForm({ name: "", student_code: "", phone: "", parent_name: "", parent_phone: "" });
-      setAddOpen(false);
+      if (modal.mode === "edit") {
+        await api.put(`/students/${modal.id}`, payload);
+        toast.success("Student updated");
+      } else {
+        await api.post(`/batches/${id}/students`, payload);
+        toast.success("Student added");
+      }
+      setModal(null);
       if (tab === "attendance") loadAttendance(); else loadStudents();
     } catch (e) { toast.error(formatApiError(e)); }
   };
@@ -87,9 +115,7 @@ export default function BatchDetail() {
   const presentCount = students.filter((s) => s.status === "present").length;
   const absentCount = students.filter((s) => s.status === "absent").length;
 
-  if (!batch) return (
-    <Layout title="Loading…"><Loading /></Layout>
-  );
+  if (!batch) return <Layout title="Loading…"><Loading /></Layout>;
 
   return (
     <Layout
@@ -125,7 +151,12 @@ export default function BatchDetail() {
                  data-testid="student-search" placeholder="Search student name or code…"
                  className="edu-input pl-9" />
         </div>
-        <button onClick={() => setAddOpen(true)} data-testid="add-student-btn" className="btn-secondary">
+        {tab === "attendance" && students.length > 0 && (
+          <button onClick={markAllPresent} data-testid="mark-all-present-btn" className="btn-secondary">
+            <CheckSquare className="w-4 h-4" /> Mark all present
+          </button>
+        )}
+        <button onClick={openAdd} data-testid="add-student-btn" className="btn-secondary">
           <UserPlus className="w-4 h-4" /> Add student
         </button>
       </div>
@@ -140,35 +171,40 @@ export default function BatchDetail() {
           {filtered.map((s) => (
             <div key={s.id} data-testid={`student-row-${s.id}`}
                  className="edu-card !p-3.5 flex items-center justify-between gap-3 hover:border-edu-primary/30">
-              <div className="flex items-center gap-3 min-w-0">
+              <Link to={`/students/${s.id}`} data-testid={`student-link-${s.id}`}
+                    className="flex items-center gap-3 min-w-0 group flex-1">
                 <Initials name={s.name} />
                 <div className="min-w-0">
-                  <div className="font-semibold text-[15px] truncate">{s.name}</div>
+                  <div className="font-semibold text-[15px] truncate group-hover:text-edu-primary transition-colors">{s.name}</div>
                   <div className="text-[12px] text-edu-on-variant truncate">
                     {s.student_code ? `ID: ${s.student_code}` : (s.phone || "—")}
                   </div>
                 </div>
-              </div>
+              </Link>
               {tab === "attendance" ? (
                 <div className="pill-group">
-                  <button
-                    data-testid={`mark-present-${s.id}`}
-                    onClick={() => setStatus(s.id, "present")}
-                    className={`pill ${s.status === "present" ? "pill-active-present" : "pill-inactive"}`}>
+                  <button data-testid={`mark-present-${s.id}`} onClick={() => setStatus(s.id, "present")}
+                          className={`pill ${s.status === "present" ? "pill-active-present" : "pill-inactive"}`}>
                     Present
                   </button>
-                  <button
-                    data-testid={`mark-absent-${s.id}`}
-                    onClick={() => setStatus(s.id, "absent")}
-                    className={`pill ${s.status === "absent" ? "pill-active-absent" : "pill-inactive"}`}>
+                  <button data-testid={`mark-absent-${s.id}`} onClick={() => setStatus(s.id, "absent")}
+                          className={`pill ${s.status === "absent" ? "pill-active-absent" : "pill-inactive"}`}>
                     Absent
                   </button>
                 </div>
               ) : (
-                <button onClick={() => removeStudent(s.id)} data-testid={`student-delete-${s.id}`}
-                        className="btn-danger-ghost">
-                  <Trash2 className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-1">
+                  <Link to={`/students/${s.id}`} data-testid={`student-open-${s.id}`}
+                        className="text-edu-on-variant hover:text-edu-primary p-2 rounded transition-colors" title="Open profile">
+                    <ExternalLink className="w-4 h-4" />
+                  </Link>
+                  <button onClick={() => openEdit(s)} data-testid={`student-edit-${s.id}`}
+                          className="text-edu-on-variant hover:text-edu-primary p-2 rounded transition-colors" title="Edit">
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                  <button onClick={() => removeStudent(s.id)} data-testid={`student-delete-${s.id}`}
+                          className="btn-danger-ghost"><Trash2 className="w-4 h-4" /></button>
+                </div>
               )}
             </div>
           ))}
@@ -196,54 +232,61 @@ export default function BatchDetail() {
         </div>
       )}
 
-      {/* Add student modal */}
-      {addOpen && (
+      {/* Student modal (add/edit) */}
+      {modal && (
         <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] grid place-items-center p-4">
           <div className="bg-white rounded-edu w-full max-w-md p-6 reveal">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-[18px] font-semibold">Add Student</h3>
-              <button onClick={() => setAddOpen(false)} className="p-1 text-edu-on-variant"
-                      data-testid="add-student-close"><X className="w-5 h-5" /></button>
+              <h3 className="text-[18px] font-semibold">{modal.mode === "edit" ? "Edit Student" : "Add Student"}</h3>
+              <button onClick={() => setModal(null)} className="p-1 text-edu-on-variant" data-testid="student-modal-close">
+                <X className="w-5 h-5" />
+              </button>
             </div>
-            <form onSubmit={addStudent} className="space-y-3">
+            <form onSubmit={submitStudent} className="space-y-3">
               <div>
                 <label className="edu-label">Name *</label>
-                <input required data-testid="new-student-name" value={form.name}
-                       onChange={(e) => setForm({ ...form, name: e.target.value })}
+                <input required data-testid="student-name-input" value={modal.name}
+                       onChange={(e) => setModal({ ...modal, name: e.target.value })}
                        placeholder="Alex Johnson" className="edu-input" />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="edu-label">Student Code</label>
-                  <input data-testid="new-student-code" value={form.student_code}
-                         onChange={(e) => setForm({ ...form, student_code: e.target.value })}
+                  <input data-testid="student-code-input" value={modal.student_code}
+                         onChange={(e) => setModal({ ...modal, student_code: e.target.value })}
                          placeholder="#202401" className="edu-input" />
                 </div>
                 <div>
                   <label className="edu-label">Phone</label>
-                  <input data-testid="new-student-phone" value={form.phone}
-                         onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                  <input data-testid="student-phone-input" value={modal.phone}
+                         onChange={(e) => setModal({ ...modal, phone: e.target.value })}
                          placeholder="98xxxxxxxx" className="edu-input" />
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="edu-label">Parent name</label>
-                  <input value={form.parent_name}
-                         onChange={(e) => setForm({ ...form, parent_name: e.target.value })}
+                  <input data-testid="parent-name-input" value={modal.parent_name}
+                         onChange={(e) => setModal({ ...modal, parent_name: e.target.value })}
                          className="edu-input" />
                 </div>
                 <div>
                   <label className="edu-label">Parent phone</label>
-                  <input value={form.parent_phone}
-                         onChange={(e) => setForm({ ...form, parent_phone: e.target.value })}
-                         className="edu-input" />
+                  <input data-testid="parent-phone-input" value={modal.parent_phone}
+                         onChange={(e) => setModal({ ...modal, parent_phone: e.target.value })}
+                         placeholder="for WhatsApp reminders" className="edu-input" />
                 </div>
               </div>
+              <div>
+                <label className="edu-label">Custom Monthly Fee (₹)</label>
+                <input type="number" min="0" data-testid="student-fee-input" value={modal.monthly_fee}
+                       onChange={(e) => setModal({ ...modal, monthly_fee: e.target.value })}
+                       placeholder="0 = use batch default" className="edu-input" />
+              </div>
               <div className="flex gap-2 pt-2">
-                <button type="button" onClick={() => setAddOpen(false)} className="btn-ghost flex-1">Cancel</button>
-                <button type="submit" data-testid="new-student-submit" className="btn-primary flex-1">
-                  <Plus className="w-4 h-4" /> Add student
+                <button type="button" onClick={() => setModal(null)} className="btn-ghost flex-1">Cancel</button>
+                <button type="submit" data-testid="student-submit-btn" className="btn-primary flex-1">
+                  {modal.mode === "edit" ? "Save changes" : (<><Plus className="w-4 h-4" /> Add student</>)}
                 </button>
               </div>
             </form>

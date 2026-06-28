@@ -7,6 +7,7 @@ import Register from "@/pages/Register";
 import Dashboard from "@/pages/Dashboard";
 import Batches from "@/pages/Batches";
 import BatchDetail from "@/pages/BatchDetail";
+import StudentProfile from "@/pages/StudentProfile";
 import Finance from "@/pages/Finance";
 import Reports from "@/pages/Reports";
 import { Loading } from "@/components/ui-edu";
@@ -36,6 +37,7 @@ export default function App() {
           <Route path="/" element={<Protected><Dashboard /></Protected>} />
           <Route path="/batches" element={<Protected><Batches /></Protected>} />
           <Route path="/batches/:id" element={<Protected><BatchDetail /></Protected>} />
+          <Route path="/students/:id" element={<Protected><StudentProfile /></Protected>} />
           <Route path="/finance" element={<Protected><Finance /></Protected>} />
           <Route path="/reports" element={<Protected><Reports /></Protected>} />
           <Route path="*" element={<Navigate to="/" replace />} />

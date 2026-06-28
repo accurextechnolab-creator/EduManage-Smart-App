@@ -322,6 +322,56 @@ async def delete_student(student_id: str, user: dict = Depends(get_current_user)
     return {"ok": True}
 
 
+@api.get("/students/{student_id}")
+async def get_student(student_id: str, user: dict = Depends(get_current_user)):
+    s = await db.students.find_one({"_id": ObjectId(student_id)})
+    require_owner(s, user["_id"])
+    batch = await db.batches.find_one({"_id": ObjectId(s["batch_id"])})
+    return {"student": serialize_doc(s), "batch": serialize_doc(batch) if batch else None}
+
+
+@api.get("/students/{student_id}/history")
+async def student_history(student_id: str, user: dict = Depends(get_current_user)):
+    s = await db.students.find_one({"_id": ObjectId(student_id)})
+    require_owner(s, user["_id"])
+    batch = await db.batches.find_one({"_id": ObjectId(s["batch_id"])})
+
+    attendance = await db.attendance.find({
+        "user_id": user["_id"], "student_id": student_id
+    }).sort("date", -1).to_list(2000)
+    present = sum(1 for r in attendance if r["status"] == "present")
+    absent = sum(1 for r in attendance if r["status"] == "absent")
+    total = present + absent
+    pct = round((present / total) * 100) if total else 0
+
+    fees = await db.fees.find({
+        "user_id": user["_id"], "student_id": student_id
+    }).sort("month", -1).to_list(2000)
+
+    default_fee = batch.get("monthly_fee", 0) if batch else 0
+    expected = s.get("monthly_fee") if s.get("monthly_fee") not in (None, 0) else default_fee
+    total_paid = sum(f.get("amount", 0) for f in fees)
+
+    return {
+        "student": serialize_doc(s),
+        "batch": serialize_doc(batch) if batch else None,
+        "attendance_summary": {
+            "present": present, "absent": absent, "total": total, "percent": pct,
+        },
+        "attendance_records": [
+            {"date": r["date"], "status": r["status"]} for r in attendance
+        ],
+        "fees": [
+            {
+                "month": f["month"], "amount": f.get("amount", 0),
+                "paid_on": f.get("paid_on"), "note": f.get("note", ""),
+            } for f in fees
+        ],
+        "expected_monthly_fee": expected,
+        "total_paid": total_paid,
+    }
+
+
 # ---------- Attendance ----------
 @api.get("/attendance")
 async def get_attendance(batch_id: str, date: str, user: dict = Depends(get_current_user)):

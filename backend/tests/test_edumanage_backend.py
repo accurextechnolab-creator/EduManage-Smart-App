@@ -386,6 +386,102 @@ class TestDashboard:
             assert k in d
 
 
+# ---------- Iteration 3: Student profile + history + ownership ----------
+class TestStudentProfileEndpoints:
+    """GET /students/{id}, GET /students/{id}/history, PUT ownership."""
+
+    def test_get_student_returns_student_and_batch(self, admin_client, workflow_data):
+        sid = workflow_data["student"]["id"]
+        bid = workflow_data["batch"]["id"]
+        r = admin_client.get(f"{API}/students/{sid}")
+        assert r.status_code == 200
+        d = r.json()
+        assert "student" in d and "batch" in d
+        assert d["student"]["id"] == sid
+        assert d["batch"]["id"] == bid
+
+    def test_get_student_404_for_non_owner(self, secondary_client, workflow_data):
+        sid = workflow_data["student"]["id"]
+        r = secondary_client.get(f"{API}/students/{sid}")
+        assert r.status_code == 404
+
+    def test_put_batch_404_for_non_owner(self, secondary_client, workflow_data):
+        bid = workflow_data["batch"]["id"]
+        r = secondary_client.put(f"{API}/batches/{bid}",
+            json={"name": "HACK", "subject": "x", "session": "x", "monthly_fee": 0})
+        assert r.status_code == 404
+
+    def test_put_student_404_for_non_owner(self, secondary_client, workflow_data):
+        sid = workflow_data["student"]["id"]
+        r = secondary_client.put(f"{API}/students/{sid}",
+            json={"name": "HACK"})
+        assert r.status_code == 404
+
+    def test_history_percent_math_75(self, admin_client):
+        """Mark 3 present + 1 absent => 75%."""
+        b = admin_client.post(f"{API}/batches",
+            json={"name": "TEST_HistBatch", "subject": "X", "monthly_fee": 1000}).json()
+        bid = b["id"]
+        s = admin_client.post(f"{API}/batches/{bid}/students",
+            json={"name": "TEST_HistStudent"}).json()
+        sid = s["id"]
+        try:
+            # Save 4 attendance records on different dates
+            for i, status in enumerate(["present", "present", "present", "absent"]):
+                d = f"2026-01-{10+i:02d}"
+                r = admin_client.post(f"{API}/attendance/save", json={
+                    "batch_id": bid, "date": d,
+                    "marks": [{"student_id": sid, "status": status}],
+                })
+                assert r.status_code == 200
+            # Pay one fee
+            admin_client.post(f"{API}/fees/pay", json={
+                "student_id": sid, "batch_id": bid, "month": "2026-01",
+                "amount": 1000, "note": "TEST",
+            })
+            # Fetch history
+            r = admin_client.get(f"{API}/students/{sid}/history")
+            assert r.status_code == 200
+            h = r.json()
+            assert h["student"]["id"] == sid
+            assert h["batch"]["id"] == bid
+            summ = h["attendance_summary"]
+            assert summ["present"] == 3
+            assert summ["absent"] == 1
+            assert summ["total"] == 4
+            assert summ["percent"] == 75
+            assert len(h["attendance_records"]) == 4
+            assert h["expected_monthly_fee"] == 1000
+            assert h["total_paid"] == 1000
+            assert len(h["fees"]) == 1
+        finally:
+            admin_client.delete(f"{API}/batches/{bid}")
+
+    def test_history_zero_percent_when_no_marks(self, admin_client):
+        b = admin_client.post(f"{API}/batches",
+            json={"name": "TEST_HistEmpty", "subject": "X", "monthly_fee": 500}).json()
+        bid = b["id"]
+        s = admin_client.post(f"{API}/batches/{bid}/students",
+            json={"name": "TEST_HistEmptyStu"}).json()
+        sid = s["id"]
+        try:
+            r = admin_client.get(f"{API}/students/{sid}/history")
+            assert r.status_code == 200
+            h = r.json()
+            assert h["attendance_summary"]["percent"] == 0
+            assert h["attendance_summary"]["total"] == 0
+            assert h["total_paid"] == 0
+            # expected falls back to batch fee
+            assert h["expected_monthly_fee"] == 500
+        finally:
+            admin_client.delete(f"{API}/batches/{bid}")
+
+    def test_history_404_for_non_owner(self, secondary_client, workflow_data):
+        sid = workflow_data["student"]["id"]
+        r = secondary_client.get(f"{API}/students/{sid}/history")
+        assert r.status_code == 404
+
+
 class TestReports:
     def test_attendance_pdf(self, admin_client, workflow_data):
         bid = workflow_data["batch"]["id"]

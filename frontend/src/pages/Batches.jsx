@@ -1,15 +1,18 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Plus, Users, X, Trash2, BookOpen } from "lucide-react";
+import { Plus, Users, X, Trash2, BookOpen, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { api, formatApiError, inr } from "@/lib/api";
 import Layout from "@/components/Layout";
 import { Loading, Empty } from "@/components/ui-edu";
 
+const blankForm = { name: "", subject: "", session: "", monthly_fee: 0 };
+
 export default function Batches() {
   const [batches, setBatches] = useState(null);
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", subject: "", session: "", monthly_fee: 0 });
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState(blankForm);
   const [busy, setBusy] = useState(false);
 
   const load = async () => {
@@ -18,14 +21,38 @@ export default function Batches() {
   };
   useEffect(() => { load(); }, []);
 
-  const create = async (e) => {
+  const openNew = () => {
+    setEditingId(null);
+    setForm(blankForm);
+    setOpen(true);
+  };
+
+  const openEdit = (b) => {
+    setEditingId(b.id);
+    setForm({
+      name: b.name || "",
+      subject: b.subject || "",
+      session: b.session || "",
+      monthly_fee: b.monthly_fee || 0,
+    });
+    setOpen(true);
+  };
+
+  const submit = async (e) => {
     e.preventDefault();
     setBusy(true);
     try {
-      await api.post("/batches", { ...form, monthly_fee: Number(form.monthly_fee) || 0 });
-      toast.success("Batch created");
+      const payload = { ...form, monthly_fee: Number(form.monthly_fee) || 0 };
+      if (editingId) {
+        await api.put(`/batches/${editingId}`, payload);
+        toast.success("Batch updated");
+      } else {
+        await api.post("/batches", payload);
+        toast.success("Batch created");
+      }
       setOpen(false);
-      setForm({ name: "", subject: "", session: "", monthly_fee: 0 });
+      setForm(blankForm);
+      setEditingId(null);
       load();
     } catch (e) { toast.error(formatApiError(e)); }
     setBusy(false);
@@ -45,7 +72,7 @@ export default function Batches() {
       title="Batches"
       subtitle="Group your students by class, subject or session"
       action={
-        <button onClick={() => setOpen(true)} data-testid="batches-add-btn" className="btn-primary">
+        <button onClick={openNew} data-testid="batches-add-btn" className="btn-primary">
           <Plus className="w-4 h-4" /> New Batch
         </button>
       }
@@ -55,7 +82,7 @@ export default function Batches() {
           title="No batches yet"
           subtitle="Start by creating a batch — like '10th Class Batch A — Mathematics — Morning Session'."
           action={
-            <button onClick={() => setOpen(true)} data-testid="batches-empty-add-btn" className="btn-primary">
+            <button onClick={openNew} data-testid="batches-empty-add-btn" className="btn-primary">
               <Plus className="w-4 h-4" /> Create your first batch
             </button>
           }
@@ -68,10 +95,16 @@ export default function Batches() {
                 <div className="w-10 h-10 rounded-[8px] bg-edu-primary-fixed text-edu-primary grid place-items-center">
                   <BookOpen className="w-5 h-5" />
                 </div>
-                <button onClick={() => remove(b.id)} data-testid={`batch-delete-${b.id}`}
-                        className="text-edu-on-variant hover:text-edu-error p-1 rounded transition-colors">
-                  <Trash2 className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button onClick={() => openEdit(b)} data-testid={`batch-edit-${b.id}`}
+                          className="text-edu-on-variant hover:text-edu-primary p-1 rounded transition-colors" title="Edit">
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                  <button onClick={() => remove(b.id)} data-testid={`batch-delete-${b.id}`}
+                          className="text-edu-on-variant hover:text-edu-error p-1 rounded transition-colors" title="Delete">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
               <Link to={`/batches/${b.id}`} data-testid={`batch-open-${b.id}`} className="block mt-3">
                 <div className="font-semibold text-[16px] group-hover:text-edu-primary transition-colors">{b.name}</div>
@@ -94,40 +127,40 @@ export default function Batches() {
         <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] grid place-items-center p-4">
           <div className="bg-white rounded-edu w-full max-w-md p-6 reveal">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-[18px] font-semibold">New Batch</h3>
-              <button onClick={() => setOpen(false)} className="p-1 text-edu-on-variant" data-testid="new-batch-close"><X className="w-5 h-5" /></button>
+              <h3 className="text-[18px] font-semibold">{editingId ? "Edit Batch" : "New Batch"}</h3>
+              <button onClick={() => setOpen(false)} className="p-1 text-edu-on-variant" data-testid="batch-modal-close"><X className="w-5 h-5" /></button>
             </div>
-            <form onSubmit={create} className="space-y-3">
+            <form onSubmit={submit} className="space-y-3">
               <div>
                 <label className="edu-label">Batch name *</label>
-                <input required data-testid="new-batch-name" value={form.name}
+                <input required data-testid="batch-name-input" value={form.name}
                        onChange={(e) => setForm({ ...form, name: e.target.value })}
                        placeholder="10th Class Batch A" className="edu-input" />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="edu-label">Subject</label>
-                  <input data-testid="new-batch-subject" value={form.subject}
+                  <input data-testid="batch-subject-input" value={form.subject}
                          onChange={(e) => setForm({ ...form, subject: e.target.value })}
                          placeholder="Mathematics" className="edu-input" />
                 </div>
                 <div>
                   <label className="edu-label">Session</label>
-                  <input data-testid="new-batch-session" value={form.session}
+                  <input data-testid="batch-session-input" value={form.session}
                          onChange={(e) => setForm({ ...form, session: e.target.value })}
                          placeholder="Morning" className="edu-input" />
                 </div>
               </div>
               <div>
                 <label className="edu-label">Monthly Fee (₹)</label>
-                <input type="number" min="0" data-testid="new-batch-fee" value={form.monthly_fee}
+                <input type="number" min="0" data-testid="batch-fee-input" value={form.monthly_fee}
                        onChange={(e) => setForm({ ...form, monthly_fee: e.target.value })}
                        placeholder="1500" className="edu-input" />
               </div>
               <div className="flex gap-2 pt-2">
                 <button type="button" onClick={() => setOpen(false)} className="btn-ghost flex-1">Cancel</button>
-                <button type="submit" disabled={busy} data-testid="new-batch-submit" className="btn-primary flex-1">
-                  {busy ? "Creating…" : "Create batch"}
+                <button type="submit" disabled={busy} data-testid="batch-submit-btn" className="btn-primary flex-1">
+                  {busy ? "Saving…" : editingId ? "Save changes" : "Create batch"}
                 </button>
               </div>
             </form>

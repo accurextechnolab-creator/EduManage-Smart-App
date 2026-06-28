@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, X, CheckCircle2, XCircle, Trash2, IndianRupee, Receipt } from "lucide-react";
+import { Plus, X, CheckCircle2, XCircle, Trash2, IndianRupee, Receipt, MessageCircle } from "lucide-react";
 import { toast } from "sonner";
 import { api, formatApiError, inr, currentMonth, todayISO } from "@/lib/api";
 import Layout from "@/components/Layout";
@@ -20,6 +20,37 @@ function FeesPanel() {
   const [data, setData] = useState(null);
   const [payOpen, setPayOpen] = useState(false);
   const [payForm, setPayForm] = useState({ student_id: "", student_name: "", amount: 0, paid_on: todayISO(), note: "" });
+
+  const formatMonthLong = (m) => {
+    const [y, mm] = m.split("-").map(Number);
+    return new Date(y, mm - 1, 1).toLocaleString("en-IN", { month: "long", year: "numeric" });
+  };
+
+  const buildWhatsAppUrl = (phone, text) => {
+    const clean = (phone || "").replace(/[^\d]/g, "");
+    if (!clean) return null;
+    const number = clean.length === 10 ? "91" + clean : clean;
+    return `https://wa.me/${number}?text=${encodeURIComponent(text)}`;
+  };
+
+  const sendReminder = (row) => {
+    const phone = row.student.parent_phone || row.student.phone;
+    if (!phone) {
+      toast.warning("No phone number on file for this student");
+      return;
+    }
+    const greeting = row.student.parent_name ? `Hi ${row.student.parent_name}` : "Hi";
+    const text =
+`${greeting},
+
+This is a gentle reminder that ${row.student.name}'s coaching fee of ₹${row.expected} for ${formatMonthLong(month)} is still pending.
+
+Please share the payment when convenient.
+
+Thank you!`;
+    const url = buildWhatsAppUrl(phone, text);
+    if (url) window.open(url, "_blank");
+  };
 
   useEffect(() => {
     api.get("/batches").then(({ data }) => {
@@ -131,6 +162,12 @@ function FeesPanel() {
                     ) : (
                       <>
                         <span className="chip-error"><XCircle className="w-3 h-3 mr-1" /> Unpaid</span>
+                        <button onClick={() => sendReminder(r)} data-testid={`fee-whatsapp-${r.student.id}`}
+                                title="Send WhatsApp reminder"
+                                className="inline-flex items-center justify-center gap-1.5 rounded-[6px] px-2.5 py-1 text-[12px] font-semibold transition-all active:scale-[0.98]"
+                                style={{ background: "rgba(22,163,74,0.12)", color: "#15803d" }}>
+                          <MessageCircle className="w-3.5 h-3.5" /> Remind
+                        </button>
                         <button onClick={() => openPay(r)} data-testid={`fee-pay-${r.student.id}`} className="btn-secondary text-[12px] !px-3 !py-1">
                           <IndianRupee className="w-3.5 h-3.5" /> Record
                         </button>
