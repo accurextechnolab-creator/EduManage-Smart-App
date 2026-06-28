@@ -1,115 +1,122 @@
+@import url("https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600;700&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+html, body, #root {
+  height: 100%;
+}
+
 body {
-    margin: 0;
-    font-family:
-        -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen",
-        "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
-        sans-serif;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-}
-
-code {
-    font-family:
-        source-code-pro, Menlo, Monaco, Consolas, "Courier New", monospace;
+  margin: 0;
+  font-family: 'Work Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #faf8ff;
+  color: #191b23;
+  letter-spacing: -0.005em;
 }
 
 @layer base {
-    :root {
-        --background: 0 0% 100%;
-        --foreground: 0 0% 3.9%;
-        --card: 0 0% 100%;
-        --card-foreground: 0 0% 3.9%;
-        --popover: 0 0% 100%;
-        --popover-foreground: 0 0% 3.9%;
-        --primary: 0 0% 9%;
-        --primary-foreground: 0 0% 98%;
-        --secondary: 0 0% 96.1%;
-        --secondary-foreground: 0 0% 9%;
-        --muted: 0 0% 96.1%;
-        --muted-foreground: 0 0% 45.1%;
-        --accent: 0 0% 96.1%;
-        --accent-foreground: 0 0% 9%;
-        --destructive: 0 84.2% 60.2%;
-        --destructive-foreground: 0 0% 98%;
-        --border: 0 0% 89.8%;
-        --input: 0 0% 89.8%;
-        --ring: 0 0% 3.9%;
-        --chart-1: 12 76% 61%;
-        --chart-2: 173 58% 39%;
-        --chart-3: 197 37% 24%;
-        --chart-4: 43 74% 66%;
-        --chart-5: 27 87% 67%;
-        --radius: 0.5rem;
-    }
-    .dark {
-        --background: 0 0% 3.9%;
-        --foreground: 0 0% 98%;
-        --card: 0 0% 3.9%;
-        --card-foreground: 0 0% 98%;
-        --popover: 0 0% 3.9%;
-        --popover-foreground: 0 0% 98%;
-        --primary: 0 0% 98%;
-        --primary-foreground: 0 0% 9%;
-        --secondary: 0 0% 14.9%;
-        --secondary-foreground: 0 0% 98%;
-        --muted: 0 0% 14.9%;
-        --muted-foreground: 0 0% 63.9%;
-        --accent: 0 0% 14.9%;
-        --accent-foreground: 0 0% 98%;
-        --destructive: 0 62.8% 30.6%;
-        --destructive-foreground: 0 0% 98%;
-        --border: 0 0% 14.9%;
-        --input: 0 0% 14.9%;
-        --ring: 0 0% 83.1%;
-        --chart-1: 220 70% 50%;
-        --chart-2: 160 60% 45%;
-        --chart-3: 30 80% 55%;
-        --chart-4: 280 65% 60%;
-        --chart-5: 340 75% 55%;
-    }
+  :root {
+    --background: 240 100% 99%;
+    --foreground: 228 16% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 228 16% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 228 16% 12%;
+    --primary: 220 100% 35%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 30% 92%;
+    --secondary-foreground: 220 50% 25%;
+    --muted: 240 20% 95%;
+    --muted-foreground: 226 12% 30%;
+    --accent: 240 20% 95%;
+    --accent-foreground: 220 50% 25%;
+    --destructive: 0 75% 42%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 230 22% 80%;
+    --input: 230 22% 80%;
+    --ring: 220 100% 35%;
+    --radius: 0.5rem;
+  }
 }
 
 @layer base {
-    * {
-        @apply border-border;
-    }
-    body {
-        @apply bg-background text-foreground;
-    }
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground; }
 }
 
-@layer base {
-    [data-debug-wrapper="true"] {
-        display: contents !important;
-    }
+/* Numeric tabular alignment */
+.tabular-nums { font-variant-numeric: tabular-nums; }
 
-    [data-debug-wrapper="true"] > * {
-        margin-left: inherit;
-        margin-right: inherit;
-        margin-top: inherit;
-        margin-bottom: inherit;
-        padding-left: inherit;
-        padding-right: inherit;
-        padding-top: inherit;
-        padding-bottom: inherit;
-        column-gap: inherit;
-        row-gap: inherit;
-        gap: inherit;
-        border-left-width: inherit;
-        border-right-width: inherit;
-        border-top-width: inherit;
-        border-bottom-width: inherit;
-        border-left-style: inherit;
-        border-right-style: inherit;
-        border-top-style: inherit;
-        border-bottom-style: inherit;
-        border-left-color: inherit;
-        border-right-color: inherit;
-        border-top-color: inherit;
-        border-bottom-color: inherit;
-    }
+/* Status chips */
+.chip-success {
+  @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold uppercase tracking-wider;
+  background: rgba(22,163,74,0.12);
+  color: #15803d;
 }
+.chip-error {
+  @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold uppercase tracking-wider;
+  background: rgba(186,26,26,0.12);
+  color: #ba1a1a;
+}
+.chip-neutral {
+  @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold uppercase tracking-wider;
+  background: #ededf8;
+  color: #434654;
+}
+
+/* Card */
+.edu-card {
+  @apply bg-white border border-edu-outline-variant rounded-edu p-5 transition-all;
+}
+
+/* Inputs */
+.edu-input {
+  @apply w-full bg-white border border-edu-outline-variant rounded-[6px] px-3 py-2.5 text-[15px]
+         text-edu-on placeholder-edu-on-variant/60
+         focus:outline-none focus:border-edu-primary focus:ring-2 focus:ring-edu-primary/15 transition-all;
+}
+
+.edu-label {
+  @apply block text-[12px] font-semibold uppercase tracking-wider text-edu-on-variant mb-1.5;
+}
+
+/* Buttons */
+.btn-primary {
+  @apply inline-flex items-center justify-center gap-2 bg-edu-primary text-white rounded-[6px]
+         px-5 py-2.5 text-[14px] font-semibold hover:bg-edu-primary-container
+         active:scale-[0.98] transition-all disabled:opacity-50 disabled:pointer-events-none;
+}
+.btn-ghost {
+  @apply inline-flex items-center justify-center gap-2 bg-transparent text-edu-primary rounded-[6px]
+         px-3 py-2 text-[14px] font-semibold hover:bg-edu-surface-low active:scale-[0.98] transition-all;
+}
+.btn-secondary {
+  @apply inline-flex items-center justify-center gap-2 bg-edu-primary-fixed text-edu-primary rounded-[6px]
+         px-4 py-2.5 text-[14px] font-semibold hover:bg-[#cdd5ff] active:scale-[0.98] transition-all;
+}
+.btn-danger-ghost {
+  @apply inline-flex items-center justify-center gap-2 bg-transparent text-edu-error rounded-[6px]
+         px-3 py-2 text-[14px] font-semibold hover:bg-edu-error-bg active:scale-[0.98] transition-all;
+}
+
+/* Pill toggle (present/absent) */
+.pill-group {
+  @apply inline-flex items-center bg-edu-surface-low border border-edu-outline-variant rounded-full p-1 gap-1;
+}
+.pill {
+  @apply px-3 py-1 rounded-full text-[12px] font-semibold uppercase tracking-wider transition-all;
+}
+.pill-active-present { background: rgba(22,163,74,0.15); color: #15803d; }
+.pill-active-absent { background: rgba(186,26,26,0.15); color: #ba1a1a; }
+.pill-inactive { color: #434654; }
+
+/* Scrollbar */
+.scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: #c3c5d7; border-radius: 6px; }
+
+/* Fade reveal */
+.reveal { animation: fade-up .35s ease-out both; }

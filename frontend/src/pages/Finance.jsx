@@ -1,0 +1,332 @@
+import { useEffect, useState } from "react";
+import { Plus, X, CheckCircle2, XCircle, Trash2, IndianRupee, Receipt } from "lucide-react";
+import { toast } from "sonner";
+import { api, formatApiError, inr, currentMonth, todayISO } from "@/lib/api";
+import Layout from "@/components/Layout";
+import { Loading, Initials } from "@/components/ui-edu";
+
+function MonthInput({ value, onChange, testId }) {
+  return (
+    <input type="month" data-testid={testId} value={value}
+           onChange={(e) => onChange(e.target.value)}
+           className="edu-input sm:max-w-[180px]" />
+  );
+}
+
+function FeesPanel() {
+  const [batches, setBatches] = useState([]);
+  const [batchId, setBatchId] = useState("");
+  const [month, setMonth] = useState(currentMonth());
+  const [data, setData] = useState(null);
+  const [payOpen, setPayOpen] = useState(false);
+  const [payForm, setPayForm] = useState({ student_id: "", student_name: "", amount: 0, paid_on: todayISO(), note: "" });
+
+  useEffect(() => {
+    api.get("/batches").then(({ data }) => {
+      setBatches(data);
+      if (!batchId && data[0]) setBatchId(data[0].id);
+    });
+  }, []);
+
+  const load = async () => {
+    if (!batchId) return;
+    const { data } = await api.get("/fees", { params: { batch_id: batchId, month } });
+    setData(data);
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [batchId, month]);
+
+  const totalPaid = data?.rows.reduce((s, r) => s + r.paid, 0) || 0;
+  const totalExpected = data?.rows.reduce((s, r) => s + r.expected, 0) || 0;
+
+  const openPay = (r) => {
+    setPayForm({
+      student_id: r.student.id,
+      student_name: r.student.name,
+      amount: r.paid > 0 ? r.paid : r.expected,
+      paid_on: r.paid_on || todayISO(),
+      note: r.note || "",
+    });
+    setPayOpen(true);
+  };
+
+  const submitPay = async (e) => {
+    e.preventDefault();
+    try {
+      await api.post("/fees/pay", {
+        batch_id: batchId,
+        student_id: payForm.student_id,
+        month,
+        amount: Number(payForm.amount) || 0,
+        paid_on: payForm.paid_on,
+        note: payForm.note || "",
+      });
+      toast.success("Payment recorded");
+      setPayOpen(false);
+      load();
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  const unmark = async (sid) => {
+    if (!confirm("Mark as unpaid? This deletes the payment record for this month.")) return;
+    try {
+      await api.delete("/fees", { params: { batch_id: batchId, student_id: sid, month } });
+      toast.success("Marked as unpaid");
+      load();
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  if (batches.length === 0) {
+    return <div className="edu-card text-center py-10 text-edu-on-variant">Create a batch first to track fees.</div>;
+  }
+
+  return (
+    <>
+      <div className="flex flex-col sm:flex-row gap-3 mb-4">
+        <select data-testid="fees-batch-select" value={batchId} onChange={(e) => setBatchId(e.target.value)} className="edu-input sm:max-w-[240px]">
+          {batches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+        </select>
+        <MonthInput value={month} onChange={setMonth} testId="fees-month" />
+      </div>
+
+      {!data ? <Loading /> : (
+        <>
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            <div className="edu-card !p-3">
+              <div className="text-[10px] uppercase tracking-wider text-edu-on-variant">Collected</div>
+              <div className="text-[18px] font-bold text-[#15803d] tabular-nums">{inr(totalPaid)}</div>
+            </div>
+            <div className="edu-card !p-3">
+              <div className="text-[10px] uppercase tracking-wider text-edu-on-variant">Expected</div>
+              <div className="text-[18px] font-bold tabular-nums">{inr(totalExpected)}</div>
+            </div>
+            <div className="edu-card !p-3">
+              <div className="text-[10px] uppercase tracking-wider text-edu-on-variant">Pending</div>
+              <div className="text-[18px] font-bold text-edu-error tabular-nums">{inr(Math.max(0, totalExpected - totalPaid))}</div>
+            </div>
+          </div>
+
+          {data.rows.length === 0 ? (
+            <div className="edu-card text-center py-10 text-edu-on-variant">No students in this batch yet.</div>
+          ) : (
+            <div className="space-y-2">
+              {data.rows.map((r) => (
+                <div key={r.student.id} className="edu-card !p-3.5 flex items-center justify-between gap-3" data-testid={`fee-row-${r.student.id}`}>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Initials name={r.student.name} />
+                    <div className="min-w-0">
+                      <div className="font-semibold text-[15px] truncate">{r.student.name}</div>
+                      <div className="text-[12px] text-edu-on-variant">
+                        Expected <span className="tabular-nums">{inr(r.expected)}</span>
+                        {r.paid > 0 && <> · Paid <span className="tabular-nums">{inr(r.paid)}</span> on {r.paid_on}</>}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {r.status === "paid" ? (
+                      <>
+                        <span className="chip-success"><CheckCircle2 className="w-3 h-3 mr-1" /> Paid</span>
+                        <button onClick={() => unmark(r.student.id)} data-testid={`fee-unmark-${r.student.id}`}
+                                className="btn-danger-ghost text-[12px] !px-2 !py-1">Unmark</button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="chip-error"><XCircle className="w-3 h-3 mr-1" /> Unpaid</span>
+                        <button onClick={() => openPay(r)} data-testid={`fee-pay-${r.student.id}`} className="btn-secondary text-[12px] !px-3 !py-1">
+                          <IndianRupee className="w-3.5 h-3.5" /> Record
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {payOpen && (
+        <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] grid place-items-center p-4">
+          <div className="bg-white rounded-edu w-full max-w-md p-6 reveal">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-[18px] font-semibold">Record payment</h3>
+              <button onClick={() => setPayOpen(false)} className="p-1 text-edu-on-variant" data-testid="pay-close"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="text-[14px] text-edu-on-variant mb-3">For <span className="font-semibold text-edu-on">{payForm.student_name}</span> · {month}</div>
+            <form onSubmit={submitPay} className="space-y-3">
+              <div>
+                <label className="edu-label">Amount (₹) *</label>
+                <input required type="number" min="0" data-testid="pay-amount" value={payForm.amount}
+                       onChange={(e) => setPayForm({ ...payForm, amount: e.target.value })}
+                       className="edu-input" />
+              </div>
+              <div>
+                <label className="edu-label">Paid on</label>
+                <input type="date" data-testid="pay-date" value={payForm.paid_on}
+                       onChange={(e) => setPayForm({ ...payForm, paid_on: e.target.value })}
+                       className="edu-input" />
+              </div>
+              <div>
+                <label className="edu-label">Note (optional)</label>
+                <input value={payForm.note} data-testid="pay-note"
+                       onChange={(e) => setPayForm({ ...payForm, note: e.target.value })}
+                       placeholder="UPI / Cash / Cheque" className="edu-input" />
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button type="button" onClick={() => setPayOpen(false)} className="btn-ghost flex-1">Cancel</button>
+                <button type="submit" data-testid="pay-submit" className="btn-primary flex-1">Save payment</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function ExpensesPanel() {
+  const [month, setMonth] = useState(currentMonth());
+  const [expenses, setExpenses] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({ title: "", amount: 0, category: "Utilities", date: todayISO(), note: "" });
+
+  const load = async () => {
+    const { data } = await api.get("/expenses", { params: { month } });
+    setExpenses(data);
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [month]);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    try {
+      await api.post("/expenses", { ...form, amount: Number(form.amount) || 0 });
+      toast.success("Expense added");
+      setForm({ title: "", amount: 0, category: "Utilities", date: todayISO(), note: "" });
+      setOpen(false);
+      load();
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  const remove = async (id) => {
+    if (!confirm("Delete this expense?")) return;
+    try { await api.delete(`/expenses/${id}`); toast.success("Deleted"); load(); }
+    catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  const total = expenses?.reduce((s, e) => s + (e.amount || 0), 0) || 0;
+
+  return (
+    <>
+      <div className="flex flex-col sm:flex-row gap-3 mb-4">
+        <MonthInput value={month} onChange={setMonth} testId="exp-month" />
+        <button onClick={() => setOpen(true)} data-testid="exp-add-btn" className="btn-primary sm:ml-auto">
+          <Plus className="w-4 h-4" /> New Expense
+        </button>
+      </div>
+
+      <div className="edu-card !p-3 mb-4 flex items-center justify-between">
+        <div className="text-[12px] uppercase tracking-wider text-edu-on-variant">Total for {month}</div>
+        <div className="text-[20px] font-bold text-edu-error tabular-nums">{inr(total)}</div>
+      </div>
+
+      {expenses === null ? <Loading /> : expenses.length === 0 ? (
+        <div className="edu-card text-center py-10 text-edu-on-variant">
+          No expenses logged for this month.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {expenses.map((e) => (
+            <div key={e.id} className="edu-card !p-3.5 flex items-center justify-between" data-testid={`exp-row-${e.id}`}>
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-[8px] bg-edu-error-bg text-edu-error grid place-items-center">
+                  <Receipt className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="font-semibold text-[15px] truncate">{e.title}</div>
+                  <div className="text-[12px] text-edu-on-variant">
+                    {e.date} · {e.category}{e.note ? ` · ${e.note}` : ""}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="text-[15px] font-bold tabular-nums">{inr(e.amount)}</div>
+                <button onClick={() => remove(e.id)} data-testid={`exp-delete-${e.id}`} className="btn-danger-ghost"><Trash2 className="w-4 h-4" /></button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {open && (
+        <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] grid place-items-center p-4">
+          <div className="bg-white rounded-edu w-full max-w-md p-6 reveal">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-[18px] font-semibold">New Expense</h3>
+              <button onClick={() => setOpen(false)} className="p-1 text-edu-on-variant" data-testid="exp-close"><X className="w-5 h-5" /></button>
+            </div>
+            <form onSubmit={submit} className="space-y-3">
+              <div>
+                <label className="edu-label">Title *</label>
+                <input required data-testid="exp-title" value={form.title}
+                       onChange={(e) => setForm({ ...form, title: e.target.value })}
+                       placeholder="Electricity bill" className="edu-input" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="edu-label">Amount (₹) *</label>
+                  <input required type="number" min="0" data-testid="exp-amount" value={form.amount}
+                         onChange={(e) => setForm({ ...form, amount: e.target.value })}
+                         className="edu-input" />
+                </div>
+                <div>
+                  <label className="edu-label">Date</label>
+                  <input type="date" data-testid="exp-date" value={form.date}
+                         onChange={(e) => setForm({ ...form, date: e.target.value })}
+                         className="edu-input" />
+                </div>
+              </div>
+              <div>
+                <label className="edu-label">Category</label>
+                <select data-testid="exp-category" value={form.category}
+                        onChange={(e) => setForm({ ...form, category: e.target.value })}
+                        className="edu-input">
+                  {["Utilities", "Rent", "Stationery", "Salary", "Marketing", "Travel", "Internet", "Other"].map((c) =>
+                    <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="edu-label">Note</label>
+                <input value={form.note} data-testid="exp-note"
+                       onChange={(e) => setForm({ ...form, note: e.target.value })}
+                       className="edu-input" />
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button type="button" onClick={() => setOpen(false)} className="btn-ghost flex-1">Cancel</button>
+                <button type="submit" data-testid="exp-submit" className="btn-primary flex-1">Add expense</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+export default function Finance() {
+  const [tab, setTab] = useState("fees");
+  return (
+    <Layout title="Finance" subtitle="Manage fees collection and expenses">
+      <div className="flex items-center gap-1 mb-5 bg-white border border-edu-outline-variant rounded-full p-1 w-fit">
+        <button onClick={() => setTab("fees")} data-testid="finance-tab-fees"
+                className={`px-4 py-1.5 rounded-full text-[13px] font-semibold transition-all ${tab === "fees" ? "bg-edu-primary text-white" : "text-edu-on-variant"}`}>
+          Fees
+        </button>
+        <button onClick={() => setTab("expenses")} data-testid="finance-tab-expenses"
+                className={`px-4 py-1.5 rounded-full text-[13px] font-semibold transition-all ${tab === "expenses" ? "bg-edu-primary text-white" : "text-edu-on-variant"}`}>
+          Expenses
+        </button>
+      </div>
+
+      {tab === "fees" ? <FeesPanel /> : <ExpensesPanel />}
+    </Layout>
+  );
+}

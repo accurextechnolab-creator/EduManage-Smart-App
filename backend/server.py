@@ -1,89 +1,677 @@
-from fastapi import FastAPI, APIRouter
 from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-import os
-import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List
-import uuid
-from datetime import datetime, timezone
-
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
+import os
+import logging
+import uuid
+import io
+from datetime import datetime, timezone, timedelta, date
+from typing import Optional, List, Annotated
+
+import bcrypt
+import jwt
+from bson import ObjectId
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
+from starlette.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
+from pydantic import BaseModel, BeforeValidator, ConfigDict, EmailStr, Field
+
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import cm
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+
+# ---------- Setup ----------
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# Create the main app without a prefix
-app = FastAPI()
+JWT_ALGORITHM = "HS256"
+JWT_SECRET = os.environ['JWT_SECRET']
 
-# Create a router with the /api prefix
-api_router = APIRouter(prefix="/api")
+app = FastAPI(title="EduManage API")
+api = APIRouter(prefix="/api")
+auth_router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("edumanage")
+
+# ---------- Pydantic helpers ----------
+def str_objectid(v) -> str:
+    if isinstance(v, ObjectId):
+        return str(v)
+    return str(v)
+
+PyObjectId = Annotated[str, BeforeValidator(str_objectid)]
 
 
-# Define Models
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # Ignore MongoDB's _id field
-    
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
 
-class StatusCheckCreate(BaseModel):
-    client_name: str
 
-# Add your routes to the router instead of directly to app
-@api_router.get("/")
+def iso(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat()
+
+
+# ---------- Models ----------
+class UserOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    id: PyObjectId = Field(alias="_id")
+    email: str
+    name: str
+    role: str = "teacher"
+
+
+class RegisterIn(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=6)
+    name: str = Field(min_length=1)
+
+
+class LoginIn(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class BatchIn(BaseModel):
+    name: str
+    subject: Optional[str] = ""
+    session: Optional[str] = ""
+    monthly_fee: float = 0
+
+
+class StudentIn(BaseModel):
+    name: str
+    student_code: Optional[str] = ""
+    phone: Optional[str] = ""
+    parent_name: Optional[str] = ""
+    parent_phone: Optional[str] = ""
+    monthly_fee: Optional[float] = None  # override batch fee
+
+
+class AttendanceMark(BaseModel):
+    student_id: str
+    status: str  # "present" | "absent"
+
+
+class AttendanceSaveIn(BaseModel):
+    batch_id: str
+    date: str  # YYYY-MM-DD
+    marks: List[AttendanceMark]
+
+
+class FeePayIn(BaseModel):
+    student_id: str
+    batch_id: str
+    month: str  # YYYY-MM
+    amount: float
+    paid_on: Optional[str] = None  # YYYY-MM-DD
+    note: Optional[str] = ""
+
+
+class ExpenseIn(BaseModel):
+    title: str
+    amount: float
+    category: str = "General"
+    date: str  # YYYY-MM-DD
+    note: Optional[str] = ""
+
+
+# ---------- Auth utils ----------
+def hash_password(p: str) -> str:
+    return bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
+
+
+def verify_password(p: str, h: str) -> bool:
+    try:
+        return bcrypt.checkpw(p.encode(), h.encode())
+    except Exception:
+        return False
+
+
+def create_access_token(user_id: str, email: str) -> str:
+    payload = {"sub": user_id, "email": email,
+               "exp": now_utc() + timedelta(days=7), "type": "access"}
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+async def get_current_user(request: Request) -> dict:
+    token = request.cookies.get("access_token")
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        if payload.get("type") != "access":
+            raise HTTPException(status_code=401, detail="Invalid token type")
+        user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
+        user["_id"] = str(user["_id"])
+        user.pop("password_hash", None)
+        return user
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
+def set_auth_cookie(response: Response, token: str):
+    response.set_cookie(
+        key="access_token", value=token, httponly=True,
+        secure=True, samesite="none", max_age=7 * 24 * 3600, path="/"
+    )
+
+
+# ---------- Auth endpoints ----------
+@auth_router.post("/register")
+async def register(payload: RegisterIn, response: Response):
+    email = payload.email.lower().strip()
+    existing = await db.users.find_one({"email": email})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    doc = {
+        "email": email,
+        "password_hash": hash_password(payload.password),
+        "name": payload.name.strip(),
+        "role": "teacher",
+        "created_at": iso(now_utc()),
+    }
+    result = await db.users.insert_one(doc)
+    uid = str(result.inserted_id)
+    token = create_access_token(uid, email)
+    set_auth_cookie(response, token)
+    return {"_id": uid, "email": email, "name": doc["name"], "role": "teacher", "token": token}
+
+
+@auth_router.post("/login")
+async def login(payload: LoginIn, response: Response):
+    email = payload.email.lower().strip()
+    user = await db.users.find_one({"email": email})
+    if not user or not verify_password(payload.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    uid = str(user["_id"])
+    token = create_access_token(uid, email)
+    set_auth_cookie(response, token)
+    return {"_id": uid, "email": email, "name": user.get("name", ""), "role": user.get("role", "teacher"), "token": token}
+
+
+@auth_router.post("/logout")
+async def logout(response: Response):
+    response.delete_cookie("access_token", path="/")
+    return {"ok": True}
+
+
+@auth_router.get("/me")
+async def me(user: dict = Depends(get_current_user)):
+    return {"_id": user["_id"], "email": user["email"], "name": user.get("name", ""), "role": user.get("role", "teacher")}
+
+
+# ---------- Helpers ----------
+def serialize_doc(doc: dict) -> dict:
+    if not doc:
+        return doc
+    out = dict(doc)
+    if "_id" in out:
+        out["id"] = str(out.pop("_id"))
+    return out
+
+
+def require_owner(doc: dict, user_id: str):
+    if not doc or doc.get("user_id") != user_id:
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+# ---------- Batches ----------
+@api.get("/batches")
+async def list_batches(user: dict = Depends(get_current_user)):
+    docs = await db.batches.find({"user_id": user["_id"]}).sort("created_at", -1).to_list(500)
+    result = []
+    for d in docs:
+        student_count = await db.students.count_documents({"batch_id": str(d["_id"]), "user_id": user["_id"]})
+        item = serialize_doc(d)
+        item["student_count"] = student_count
+        result.append(item)
+    return result
+
+
+@api.post("/batches")
+async def create_batch(payload: BatchIn, user: dict = Depends(get_current_user)):
+    doc = payload.model_dump()
+    doc.update({"user_id": user["_id"], "created_at": iso(now_utc())})
+    r = await db.batches.insert_one(doc)
+    new = await db.batches.find_one({"_id": r.inserted_id})
+    return serialize_doc(new)
+
+
+@api.get("/batches/{batch_id}")
+async def get_batch(batch_id: str, user: dict = Depends(get_current_user)):
+    doc = await db.batches.find_one({"_id": ObjectId(batch_id)})
+    require_owner(doc, user["_id"])
+    return serialize_doc(doc)
+
+
+@api.put("/batches/{batch_id}")
+async def update_batch(batch_id: str, payload: BatchIn, user: dict = Depends(get_current_user)):
+    doc = await db.batches.find_one({"_id": ObjectId(batch_id)})
+    require_owner(doc, user["_id"])
+    await db.batches.update_one({"_id": ObjectId(batch_id)}, {"$set": payload.model_dump()})
+    new = await db.batches.find_one({"_id": ObjectId(batch_id)})
+    return serialize_doc(new)
+
+
+@api.delete("/batches/{batch_id}")
+async def delete_batch(batch_id: str, user: dict = Depends(get_current_user)):
+    doc = await db.batches.find_one({"_id": ObjectId(batch_id)})
+    require_owner(doc, user["_id"])
+    await db.batches.delete_one({"_id": ObjectId(batch_id)})
+    await db.students.delete_many({"batch_id": batch_id, "user_id": user["_id"]})
+    await db.attendance.delete_many({"batch_id": batch_id, "user_id": user["_id"]})
+    await db.fees.delete_many({"batch_id": batch_id, "user_id": user["_id"]})
+    return {"ok": True}
+
+
+# ---------- Students ----------
+@api.get("/batches/{batch_id}/students")
+async def list_students(batch_id: str, user: dict = Depends(get_current_user)):
+    batch = await db.batches.find_one({"_id": ObjectId(batch_id)})
+    require_owner(batch, user["_id"])
+    docs = await db.students.find({"batch_id": batch_id, "user_id": user["_id"]}).sort("name", 1).to_list(1000)
+    return [serialize_doc(d) for d in docs]
+
+
+@api.post("/batches/{batch_id}/students")
+async def add_student(batch_id: str, payload: StudentIn, user: dict = Depends(get_current_user)):
+    batch = await db.batches.find_one({"_id": ObjectId(batch_id)})
+    require_owner(batch, user["_id"])
+    doc = payload.model_dump()
+    doc.update({
+        "user_id": user["_id"],
+        "batch_id": batch_id,
+        "created_at": iso(now_utc()),
+    })
+    r = await db.students.insert_one(doc)
+    new = await db.students.find_one({"_id": r.inserted_id})
+    return serialize_doc(new)
+
+
+@api.put("/students/{student_id}")
+async def update_student(student_id: str, payload: StudentIn, user: dict = Depends(get_current_user)):
+    s = await db.students.find_one({"_id": ObjectId(student_id)})
+    require_owner(s, user["_id"])
+    await db.students.update_one({"_id": ObjectId(student_id)}, {"$set": payload.model_dump()})
+    new = await db.students.find_one({"_id": ObjectId(student_id)})
+    return serialize_doc(new)
+
+
+@api.delete("/students/{student_id}")
+async def delete_student(student_id: str, user: dict = Depends(get_current_user)):
+    s = await db.students.find_one({"_id": ObjectId(student_id)})
+    require_owner(s, user["_id"])
+    await db.students.delete_one({"_id": ObjectId(student_id)})
+    await db.attendance.delete_many({"student_id": student_id, "user_id": user["_id"]})
+    await db.fees.delete_many({"student_id": student_id, "user_id": user["_id"]})
+    return {"ok": True}
+
+
+# ---------- Attendance ----------
+@api.get("/attendance")
+async def get_attendance(batch_id: str, date: str, user: dict = Depends(get_current_user)):
+    batch = await db.batches.find_one({"_id": ObjectId(batch_id)})
+    require_owner(batch, user["_id"])
+    students = await db.students.find({"batch_id": batch_id, "user_id": user["_id"]}).sort("name", 1).to_list(1000)
+    records = await db.attendance.find({"batch_id": batch_id, "user_id": user["_id"], "date": date}).to_list(2000)
+    status_map = {r["student_id"]: r["status"] for r in records}
+    return {
+        "batch_id": batch_id,
+        "date": date,
+        "students": [
+            {**serialize_doc(s), "status": status_map.get(str(s["_id"]), None)}
+            for s in students
+        ],
+    }
+
+
+@api.post("/attendance/save")
+async def save_attendance(payload: AttendanceSaveIn, user: dict = Depends(get_current_user)):
+    batch = await db.batches.find_one({"_id": ObjectId(payload.batch_id)})
+    require_owner(batch, user["_id"])
+    for mark in payload.marks:
+        await db.attendance.update_one(
+            {"user_id": user["_id"], "batch_id": payload.batch_id,
+             "student_id": mark.student_id, "date": payload.date},
+            {"$set": {"status": mark.status, "updated_at": iso(now_utc())}},
+            upsert=True,
+        )
+    return {"ok": True, "count": len(payload.marks)}
+
+
+@api.get("/attendance/summary")
+async def attendance_summary(batch_id: str, start: str, end: str, user: dict = Depends(get_current_user)):
+    """Per-student summary between dates (inclusive)."""
+    batch = await db.batches.find_one({"_id": ObjectId(batch_id)})
+    require_owner(batch, user["_id"])
+    students = await db.students.find({"batch_id": batch_id, "user_id": user["_id"]}).sort("name", 1).to_list(1000)
+    records = await db.attendance.find({
+        "batch_id": batch_id, "user_id": user["_id"],
+        "date": {"$gte": start, "$lte": end},
+    }).to_list(10000)
+    by_student = {}
+    for r in records:
+        d = by_student.setdefault(r["student_id"], {"present": 0, "absent": 0})
+        if r["status"] == "present":
+            d["present"] += 1
+        elif r["status"] == "absent":
+            d["absent"] += 1
+    return {
+        "batch": serialize_doc(batch),
+        "start": start, "end": end,
+        "rows": [
+            {
+                "student": serialize_doc(s),
+                "present": by_student.get(str(s["_id"]), {}).get("present", 0),
+                "absent": by_student.get(str(s["_id"]), {}).get("absent", 0),
+            } for s in students
+        ],
+    }
+
+
+# ---------- Fees ----------
+@api.get("/fees")
+async def list_fees(batch_id: str, month: str, user: dict = Depends(get_current_user)):
+    batch = await db.batches.find_one({"_id": ObjectId(batch_id)})
+    require_owner(batch, user["_id"])
+    students = await db.students.find({"batch_id": batch_id, "user_id": user["_id"]}).sort("name", 1).to_list(1000)
+    fees = await db.fees.find({"batch_id": batch_id, "user_id": user["_id"], "month": month}).to_list(2000)
+    fee_map = {f["student_id"]: serialize_doc(f) for f in fees}
+    default_fee = batch.get("monthly_fee", 0) or 0
+    rows = []
+    for s in students:
+        sid = str(s["_id"])
+        student_fee = s.get("monthly_fee") if s.get("monthly_fee") not in (None, 0) else default_fee
+        f = fee_map.get(sid)
+        rows.append({
+            "student": serialize_doc(s),
+            "expected": student_fee,
+            "paid": f.get("amount", 0) if f else 0,
+            "paid_on": f.get("paid_on") if f else None,
+            "note": f.get("note", "") if f else "",
+            "status": "paid" if f and f.get("amount", 0) > 0 else "unpaid",
+        })
+    return {"batch": serialize_doc(batch), "month": month, "rows": rows}
+
+
+@api.post("/fees/pay")
+async def pay_fee(payload: FeePayIn, user: dict = Depends(get_current_user)):
+    batch = await db.batches.find_one({"_id": ObjectId(payload.batch_id)})
+    require_owner(batch, user["_id"])
+    paid_on = payload.paid_on or date.today().isoformat()
+    await db.fees.update_one(
+        {"user_id": user["_id"], "batch_id": payload.batch_id,
+         "student_id": payload.student_id, "month": payload.month},
+        {"$set": {
+            "amount": payload.amount, "paid_on": paid_on, "note": payload.note or "",
+            "updated_at": iso(now_utc()),
+        }},
+        upsert=True,
+    )
+    return {"ok": True}
+
+
+@api.delete("/fees")
+async def unpay_fee(batch_id: str, student_id: str, month: str, user: dict = Depends(get_current_user)):
+    batch = await db.batches.find_one({"_id": ObjectId(batch_id)})
+    require_owner(batch, user["_id"])
+    await db.fees.delete_one({
+        "user_id": user["_id"], "batch_id": batch_id,
+        "student_id": student_id, "month": month,
+    })
+    return {"ok": True}
+
+
+# ---------- Expenses ----------
+@api.get("/expenses")
+async def list_expenses(month: Optional[str] = None, user: dict = Depends(get_current_user)):
+    q = {"user_id": user["_id"]}
+    if month:
+        q["date"] = {"$regex": f"^{month}"}
+    docs = await db.expenses.find(q).sort("date", -1).to_list(2000)
+    return [serialize_doc(d) for d in docs]
+
+
+@api.post("/expenses")
+async def add_expense(payload: ExpenseIn, user: dict = Depends(get_current_user)):
+    doc = payload.model_dump()
+    doc.update({"user_id": user["_id"], "created_at": iso(now_utc())})
+    r = await db.expenses.insert_one(doc)
+    new = await db.expenses.find_one({"_id": r.inserted_id})
+    return serialize_doc(new)
+
+
+@api.put("/expenses/{eid}")
+async def update_expense(eid: str, payload: ExpenseIn, user: dict = Depends(get_current_user)):
+    e = await db.expenses.find_one({"_id": ObjectId(eid)})
+    require_owner(e, user["_id"])
+    await db.expenses.update_one({"_id": ObjectId(eid)}, {"$set": payload.model_dump()})
+    new = await db.expenses.find_one({"_id": ObjectId(eid)})
+    return serialize_doc(new)
+
+
+@api.delete("/expenses/{eid}")
+async def delete_expense(eid: str, user: dict = Depends(get_current_user)):
+    e = await db.expenses.find_one({"_id": ObjectId(eid)})
+    require_owner(e, user["_id"])
+    await db.expenses.delete_one({"_id": ObjectId(eid)})
+    return {"ok": True}
+
+
+# ---------- Dashboard ----------
+@api.get("/dashboard/stats")
+async def dashboard_stats(user: dict = Depends(get_current_user)):
+    today = date.today().isoformat()
+    month = today[:7]
+    total_students = await db.students.count_documents({"user_id": user["_id"]})
+    total_batches = await db.batches.count_documents({"user_id": user["_id"]})
+
+    # Today's attendance
+    today_records = await db.attendance.find({"user_id": user["_id"], "date": today}).to_list(5000)
+    present_today = sum(1 for r in today_records if r["status"] == "present")
+    absent_today = sum(1 for r in today_records if r["status"] == "absent")
+
+    # Fees this month
+    fees = await db.fees.find({"user_id": user["_id"], "month": month}).to_list(5000)
+    fees_collected = sum(f.get("amount", 0) for f in fees)
+
+    # Expenses this month
+    expenses = await db.expenses.find({"user_id": user["_id"], "date": {"$regex": f"^{month}"}}).to_list(5000)
+    expenses_total = sum(e.get("amount", 0) for e in expenses)
+
+    # Expected fees this month (sum of monthly_fee per active student)
+    batches = await db.batches.find({"user_id": user["_id"]}).to_list(500)
+    default_fees = {str(b["_id"]): b.get("monthly_fee", 0) or 0 for b in batches}
+    students = await db.students.find({"user_id": user["_id"]}).to_list(5000)
+    expected = 0
+    for s in students:
+        sf = s.get("monthly_fee") if s.get("monthly_fee") not in (None, 0) else default_fees.get(s.get("batch_id"), 0)
+        expected += sf or 0
+
+    return {
+        "total_students": total_students,
+        "total_batches": total_batches,
+        "present_today": present_today,
+        "absent_today": absent_today,
+        "fees_collected": fees_collected,
+        "fees_expected": expected,
+        "expenses_total": expenses_total,
+        "net": fees_collected - expenses_total,
+        "month": month,
+        "today": today,
+    }
+
+
+# ---------- PDF Reports ----------
+def _pdf_styles():
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name="Brand", fontName="Helvetica-Bold", fontSize=20, textColor=colors.HexColor("#003fb1")))
+    styles.add(ParagraphStyle(name="Sub", fontName="Helvetica", fontSize=11, textColor=colors.HexColor("#434654")))
+    styles.add(ParagraphStyle(name="H2", fontName="Helvetica-Bold", fontSize=14, textColor=colors.HexColor("#191b23"), spaceAfter=6))
+    return styles
+
+
+def _build_pdf(title: str, subtitle: str, sections: list) -> bytes:
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=1.5*cm, rightMargin=1.5*cm, topMargin=1.5*cm, bottomMargin=1.5*cm)
+    styles = _pdf_styles()
+    story = [
+        Paragraph("EduManage", styles["Brand"]),
+        Paragraph(title, styles["H2"]),
+        Paragraph(subtitle, styles["Sub"]),
+        Spacer(1, 0.5 * cm),
+    ]
+    for sec in sections:
+        if sec.get("heading"):
+            story.append(Paragraph(sec["heading"], styles["H2"]))
+        if sec.get("table"):
+            tbl = Table(sec["table"], repeatRows=1, hAlign="LEFT")
+            tbl.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#003fb1")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 10),
+                ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3f3fe")]),
+                ("LINEBELOW", (0, 0), (-1, -1), 0.25, colors.HexColor("#c3c5d7")),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]))
+            story.append(tbl)
+            story.append(Spacer(1, 0.4 * cm))
+    story.append(Spacer(1, 0.5 * cm))
+    story.append(Paragraph(f"Generated on {datetime.now().strftime('%d %b %Y, %I:%M %p')}", styles["Sub"]))
+    doc.build(story)
+    return buf.getvalue()
+
+
+def _pdf_response(filename: str, content: bytes) -> StreamingResponse:
+    return StreamingResponse(io.BytesIO(content), media_type="application/pdf",
+                             headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@api.get("/reports/attendance.pdf")
+async def report_attendance_pdf(batch_id: str, start: str, end: str, user: dict = Depends(get_current_user)):
+    summary = await attendance_summary(batch_id=batch_id, start=start, end=end, user=user)
+    batch = summary["batch"]
+    rows = [["#", "Student", "Code", "Present", "Absent", "%"]]
+    for i, r in enumerate(summary["rows"], 1):
+        s = r["student"]
+        p, a = r["present"], r["absent"]
+        total = p + a
+        pct = f"{(p/total*100):.0f}%" if total else "-"
+        rows.append([str(i), s.get("name", ""), s.get("student_code", ""), str(p), str(a), pct])
+    pdf = _build_pdf(
+        title=f"Attendance Report — {batch.get('name', '')}",
+        subtitle=f"{batch.get('subject', '')} • {start} to {end}",
+        sections=[{"heading": "Per-Student Summary", "table": rows}],
+    )
+    return _pdf_response(f"attendance_{batch_id}_{start}_{end}.pdf", pdf)
+
+
+@api.get("/reports/fees.pdf")
+async def report_fees_pdf(batch_id: str, month: str, user: dict = Depends(get_current_user)):
+    data = await list_fees(batch_id=batch_id, month=month, user=user)
+    batch = data["batch"]
+    rows = [["#", "Student", "Code", "Expected (Rs.)", "Paid (Rs.)", "Status", "Paid On"]]
+    total_expected = 0
+    total_paid = 0
+    for i, r in enumerate(data["rows"], 1):
+        s = r["student"]
+        total_expected += r["expected"] or 0
+        total_paid += r["paid"] or 0
+        rows.append([str(i), s.get("name", ""), s.get("student_code", ""),
+                     f"{r['expected']:.0f}", f"{r['paid']:.0f}",
+                     r["status"].title(), r.get("paid_on") or "-"])
+    rows.append(["", "TOTAL", "", f"{total_expected:.0f}", f"{total_paid:.0f}", "", ""])
+    pdf = _build_pdf(
+        title=f"Fee Collection Report — {batch.get('name', '')}",
+        subtitle=f"Month: {month}",
+        sections=[{"heading": "Fee Status", "table": rows}],
+    )
+    return _pdf_response(f"fees_{batch_id}_{month}.pdf", pdf)
+
+
+@api.get("/reports/expenses.pdf")
+async def report_expenses_pdf(month: Optional[str] = None, user: dict = Depends(get_current_user)):
+    data = await list_expenses(month=month, user=user)
+    rows = [["#", "Date", "Title", "Category", "Amount (Rs.)"]]
+    total = 0
+    for i, e in enumerate(data, 1):
+        total += e.get("amount", 0)
+        rows.append([str(i), e.get("date", ""), e.get("title", ""), e.get("category", ""), f"{e.get('amount', 0):.0f}"])
+    rows.append(["", "", "", "TOTAL", f"{total:.0f}"])
+    pdf = _build_pdf(
+        title="Expense Report",
+        subtitle=f"Month: {month}" if month else "All time",
+        sections=[{"heading": "Expenses", "table": rows}],
+    )
+    return _pdf_response(f"expenses_{month or 'all'}.pdf", pdf)
+
+
+# ---------- Health ----------
+@api.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return {"message": "EduManage API"}
 
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.model_dump()
-    status_obj = StatusCheck(**status_dict)
-    
-    # Convert to dict and serialize datetime to ISO string for MongoDB
-    doc = status_obj.model_dump()
-    doc['timestamp'] = doc['timestamp'].isoformat()
-    
-    _ = await db.status_checks.insert_one(doc)
-    return status_obj
 
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    # Exclude MongoDB's _id field from the query results
-    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
-    
-    # Convert ISO string timestamps back to datetime objects
-    for check in status_checks:
-        if isinstance(check['timestamp'], str):
-            check['timestamp'] = datetime.fromisoformat(check['timestamp'])
-    
-    return status_checks
+# ---------- Startup ----------
+@app.on_event("startup")
+async def startup():
+    await db.users.create_index("email", unique=True)
+    await db.batches.create_index("user_id")
+    await db.students.create_index([("user_id", 1), ("batch_id", 1)])
+    await db.attendance.create_index([("user_id", 1), ("batch_id", 1), ("date", 1)])
+    await db.fees.create_index([("user_id", 1), ("batch_id", 1), ("month", 1)])
+    await db.expenses.create_index([("user_id", 1), ("date", -1)])
 
-# Include the router in the main app
-app.include_router(api_router)
+    # Seed admin (demo teacher)
+    admin_email = os.environ.get("ADMIN_EMAIL", "admin@edumanage.app").lower()
+    admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
+    existing = await db.users.find_one({"email": admin_email})
+    if existing is None:
+        await db.users.insert_one({
+            "email": admin_email,
+            "password_hash": hash_password(admin_password),
+            "name": "Demo Teacher",
+            "role": "admin",
+            "created_at": iso(now_utc()),
+        })
+        logger.info(f"Seeded admin user {admin_email}")
 
+
+@app.on_event("shutdown")
+async def shutdown():
+    client.close()
+
+
+# ---------- Mount routers + CORS ----------
+app.include_router(auth_router)
+app.include_router(api)
+
+frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=[frontend_url, "http://localhost:3000"],
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()

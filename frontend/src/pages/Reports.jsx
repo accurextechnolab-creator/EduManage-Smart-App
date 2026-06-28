@@ -1,0 +1,174 @@
+import { useEffect, useState } from "react";
+import { Download, Share2, FileText, CalendarRange, IndianRupee, Receipt } from "lucide-react";
+import { toast } from "sonner";
+import { api, downloadPdf, formatApiError, todayISO, currentMonth } from "@/lib/api";
+import Layout from "@/components/Layout";
+
+function Section({ icon: Icon, title, subtitle, children }) {
+  return (
+    <div className="edu-card">
+      <div className="flex items-start gap-3 mb-4">
+        <div className="w-10 h-10 rounded-[8px] bg-edu-primary-fixed text-edu-primary grid place-items-center">
+          <Icon className="w-5 h-5" />
+        </div>
+        <div>
+          <div className="font-semibold text-[16px]">{title}</div>
+          <div className="text-[12px] text-edu-on-variant">{subtitle}</div>
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+const shareFile = async (blob, filename, title) => {
+  try {
+    if (navigator.canShare && window.File) {
+      const file = new File([blob], filename, { type: "application/pdf" });
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title });
+        return true;
+      }
+    }
+  } catch (_err) { /* ignore */ }
+  return false;
+};
+
+export default function Reports() {
+  const [batches, setBatches] = useState([]);
+
+  // attendance
+  const [attBatch, setAttBatch] = useState("");
+  const today = todayISO();
+  const monthAgo = new Date(); monthAgo.setDate(monthAgo.getDate() - 30);
+  const monthAgoStr = monthAgo.toISOString().slice(0, 10);
+  const [attStart, setAttStart] = useState(monthAgoStr);
+  const [attEnd, setAttEnd] = useState(today);
+
+  // fees
+  const [feeBatch, setFeeBatch] = useState("");
+  const [feeMonth, setFeeMonth] = useState(currentMonth());
+
+  // expenses
+  const [expMonth, setExpMonth] = useState(currentMonth());
+
+  useEffect(() => {
+    api.get("/batches").then(({ data }) => {
+      setBatches(data);
+      if (data[0]) { setAttBatch(data[0].id); setFeeBatch(data[0].id); }
+    });
+  }, []);
+
+  const download = async (kind) => {
+    try {
+      if (kind === "attendance") {
+        if (!attBatch) return toast.warning("Choose a batch first");
+        await downloadPdf("/reports/attendance.pdf", { batch_id: attBatch, start: attStart, end: attEnd },
+                          `attendance_${attStart}_${attEnd}.pdf`);
+      } else if (kind === "fees") {
+        if (!feeBatch) return toast.warning("Choose a batch first");
+        await downloadPdf("/reports/fees.pdf", { batch_id: feeBatch, month: feeMonth },
+                          `fees_${feeMonth}.pdf`);
+      } else {
+        await downloadPdf("/reports/expenses.pdf", { month: expMonth }, `expenses_${expMonth}.pdf`);
+      }
+      toast.success("PDF downloaded");
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  const share = async (kind) => {
+    try {
+      let url, params, filename, title;
+      if (kind === "attendance") {
+        url = "/reports/attendance.pdf"; params = { batch_id: attBatch, start: attStart, end: attEnd };
+        filename = `attendance_${attStart}_${attEnd}.pdf`; title = "Attendance Report";
+      } else if (kind === "fees") {
+        url = "/reports/fees.pdf"; params = { batch_id: feeBatch, month: feeMonth };
+        filename = `fees_${feeMonth}.pdf`; title = "Fees Report";
+      } else {
+        url = "/reports/expenses.pdf"; params = { month: expMonth };
+        filename = `expenses_${expMonth}.pdf`; title = "Expenses Report";
+      }
+      const res = await api.get(url, { params, responseType: "blob" });
+      const blob = new Blob([res.data], { type: "application/pdf" });
+      const shared = await shareFile(blob, filename, title);
+      if (!shared) {
+        // fallback: open in new tab
+        const link = URL.createObjectURL(blob);
+        window.open(link, "_blank");
+        toast.info("Sharing not supported — opened in a new tab");
+      }
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  return (
+    <Layout title="Reports" subtitle="Download or share PDF reports">
+      <div className="grid lg:grid-cols-2 gap-5">
+        <Section icon={CalendarRange} title="Attendance Report" subtitle="Per-student summary for a batch within a date range">
+          <div className="space-y-3">
+            <div>
+              <label className="edu-label">Batch</label>
+              <select data-testid="att-report-batch" value={attBatch} onChange={(e) => setAttBatch(e.target.value)} className="edu-input">
+                {batches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="edu-label">From</label>
+                <input type="date" data-testid="att-report-start" value={attStart} onChange={(e) => setAttStart(e.target.value)} className="edu-input" />
+              </div>
+              <div>
+                <label className="edu-label">To</label>
+                <input type="date" data-testid="att-report-end" value={attEnd} onChange={(e) => setAttEnd(e.target.value)} className="edu-input" />
+              </div>
+            </div>
+            <div className="flex gap-2 pt-1">
+              <button onClick={() => download("attendance")} data-testid="att-report-download" className="btn-primary flex-1"><Download className="w-4 h-4" /> Download</button>
+              <button onClick={() => share("attendance")} data-testid="att-report-share" className="btn-secondary flex-1"><Share2 className="w-4 h-4" /> Share</button>
+            </div>
+          </div>
+        </Section>
+
+        <Section icon={IndianRupee} title="Fee Collection Report" subtitle="Paid/unpaid breakdown for a specific month">
+          <div className="space-y-3">
+            <div>
+              <label className="edu-label">Batch</label>
+              <select data-testid="fee-report-batch" value={feeBatch} onChange={(e) => setFeeBatch(e.target.value)} className="edu-input">
+                {batches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="edu-label">Month</label>
+              <input type="month" data-testid="fee-report-month" value={feeMonth} onChange={(e) => setFeeMonth(e.target.value)} className="edu-input" />
+            </div>
+            <div className="flex gap-2 pt-1">
+              <button onClick={() => download("fees")} data-testid="fee-report-download" className="btn-primary flex-1"><Download className="w-4 h-4" /> Download</button>
+              <button onClick={() => share("fees")} data-testid="fee-report-share" className="btn-secondary flex-1"><Share2 className="w-4 h-4" /> Share</button>
+            </div>
+          </div>
+        </Section>
+
+        <Section icon={Receipt} title="Expense Report" subtitle="All expenses for a month">
+          <div className="space-y-3">
+            <div>
+              <label className="edu-label">Month</label>
+              <input type="month" data-testid="exp-report-month" value={expMonth} onChange={(e) => setExpMonth(e.target.value)} className="edu-input" />
+            </div>
+            <div className="flex gap-2 pt-1">
+              <button onClick={() => download("expenses")} data-testid="exp-report-download" className="btn-primary flex-1"><Download className="w-4 h-4" /> Download</button>
+              <button onClick={() => share("expenses")} data-testid="exp-report-share" className="btn-secondary flex-1"><Share2 className="w-4 h-4" /> Share</button>
+            </div>
+          </div>
+        </Section>
+
+        <Section icon={FileText} title="How to share" subtitle="Tips for getting reports to parents & friends">
+          <ul className="space-y-2 text-[14px] text-edu-on-variant list-disc pl-5">
+            <li>Tap <span className="font-semibold text-edu-on">Share</span> on phones to send via WhatsApp, email or anywhere your device supports.</li>
+            <li>On desktop, Share opens the PDF in a new tab — you can attach it to email or messaging.</li>
+            <li>Reports use a clean, printable format suitable for archives.</li>
+          </ul>
+        </Section>
+      </div>
+    </Layout>
+  );
+}
