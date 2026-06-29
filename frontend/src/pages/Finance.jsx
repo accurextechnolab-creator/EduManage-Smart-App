@@ -71,6 +71,8 @@ Thank you!`;
   const totalPaid = data?.rows.reduce((s, r) => s + r.paid, 0) || 0;
   const totalExpected = data?.rows.reduce((s, r) => s + r.expected, 0) || 0;
   const totalDiscount = data?.rows.reduce((s, r) => s + (r.discount_savings || 0), 0) || 0;
+  const totalBalanceDue = data?.rows.reduce((s, r) => s + Math.max(0, r.balance || 0), 0) || 0;
+  const totalBalanceAdvance = data?.rows.reduce((s, r) => s + Math.max(0, -(r.balance || 0)), 0) || 0;
 
   const openPay = (r) => {
     setPayForm({
@@ -145,13 +147,13 @@ Thank you!`;
 
       {!data ? <Loading /> : (
         <>
-          <div className="grid grid-cols-3 gap-3 mb-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
             <div className="edu-card !p-3">
-              <div className="text-[10px] uppercase tracking-wider text-edu-on-variant">Collected</div>
+              <div className="text-[10px] uppercase tracking-wider text-edu-on-variant">Collected this month</div>
               <div className="text-[18px] font-bold text-[#15803d] tabular-nums">{inr(totalPaid)}</div>
             </div>
             <div className="edu-card !p-3" data-testid="fees-summary-expected">
-              <div className="text-[10px] uppercase tracking-wider text-edu-on-variant">Expected</div>
+              <div className="text-[10px] uppercase tracking-wider text-edu-on-variant">Expected this month</div>
               <div className="text-[18px] font-bold tabular-nums">{inr(totalExpected)}</div>
               {totalDiscount > 0 && (
                 <div className="text-[11px] text-[#15803d] mt-0.5 tabular-nums" data-testid="fees-summary-discount">
@@ -159,9 +161,15 @@ Thank you!`;
                 </div>
               )}
             </div>
-            <div className="edu-card !p-3">
-              <div className="text-[10px] uppercase tracking-wider text-edu-on-variant">Pending</div>
-              <div className="text-[18px] font-bold text-edu-error tabular-nums">{inr(Math.max(0, totalExpected - totalPaid))}</div>
+            <div className="edu-card !p-3" data-testid="fees-summary-balance-due">
+              <div className="text-[10px] uppercase tracking-wider text-edu-on-variant">Balance due (carry-forward)</div>
+              <div className="text-[18px] font-bold text-edu-error tabular-nums">{inr(totalBalanceDue)}</div>
+              <div className="text-[10px] text-edu-on-variant mt-0.5">cumulative up to {month}</div>
+            </div>
+            <div className="edu-card !p-3" data-testid="fees-summary-balance-advance">
+              <div className="text-[10px] uppercase tracking-wider text-edu-on-variant">Advance held</div>
+              <div className="text-[18px] font-bold text-[#15803d] tabular-nums">{inr(totalBalanceAdvance)}</div>
+              <div className="text-[10px] text-edu-on-variant mt-0.5">prepayments</div>
             </div>
           </div>
 
@@ -198,10 +206,26 @@ Thank you!`;
                           <>Expected <span className="tabular-nums">{inr(r.expected)}</span></>
                         )}
                         {r.paid > 0 && <> · Paid <span className="tabular-nums">{inr(r.paid)}</span> on {r.paid_on}</>}
+                        {(r.balance || 0) !== 0 && (
+                          <span className="sm:hidden ml-1">
+                            {" · "}
+                            <span className={`font-semibold ${r.balance > 0 ? "text-edu-error" : "text-[#15803d]"}`}>
+                              {r.balance > 0 ? `Bal ${inr(r.balance)}` : `Adv ${inr(-r.balance)}`}
+                            </span>
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {(r.balance || 0) !== 0 && (
+                      <div className="text-right hidden sm:block" data-testid={`fee-balance-${r.student.id}`}>
+                        <div className="text-[10px] uppercase tracking-wider text-edu-on-variant">Balance</div>
+                        <div className={`text-[14px] font-bold tabular-nums ${r.balance > 0 ? "text-edu-error" : "text-[#15803d]"}`}>
+                          {r.balance > 0 ? inr(r.balance) : `+${inr(-r.balance)}`}
+                        </div>
+                      </div>
+                    )}
                     {r.status === "paid" ? (
                       <>
                         <span className="chip-success"><CheckCircle2 className="w-3 h-3 mr-1" /> Paid</span>

@@ -375,12 +375,14 @@ export default function Reports() {
   const [attStart, setAttStart] = useState(monthAgoStr);
   const [attEnd, setAttEnd] = useState(today);
 
-  // fees
+  // fees range
   const [feeBatch, setFeeBatch] = useState("");
-  const [feeMonth, setFeeMonth] = useState(currentMonth());
+  const [feeStartMonth, setFeeStartMonth] = useState(currentMonth());
+  const [feeEndMonth, setFeeEndMonth] = useState(currentMonth());
 
-  // expenses
-  const [expMonth, setExpMonth] = useState(currentMonth());
+  // expenses range
+  const [expStartMonth, setExpStartMonth] = useState(currentMonth());
+  const [expEndMonth, setExpEndMonth] = useState(currentMonth());
 
   useEffect(() => {
     api.get("/batches").then(({ data }) => {
@@ -397,10 +399,15 @@ export default function Reports() {
                           `attendance_${attStart}_${attEnd}.pdf`);
       } else if (kind === "fees") {
         if (!feeBatch) return toast.warning("Choose a batch first");
-        await downloadPdf("/reports/fees.pdf", { batch_id: feeBatch, month: feeMonth },
-                          `fees_${feeMonth}.pdf`);
+        if (feeStartMonth > feeEndMonth) return toast.warning("From month must be before To month");
+        await downloadPdf("/reports/fees.pdf",
+          { batch_id: feeBatch, start_month: feeStartMonth, end_month: feeEndMonth },
+          `fees_${feeStartMonth}_${feeEndMonth}.pdf`);
       } else {
-        await downloadPdf("/reports/expenses.pdf", { month: expMonth }, `expenses_${expMonth}.pdf`);
+        if (expStartMonth > expEndMonth) return toast.warning("From month must be before To month");
+        await downloadPdf("/reports/expenses.pdf",
+          { start_month: expStartMonth, end_month: expEndMonth },
+          `expenses_${expStartMonth}_${expEndMonth}.pdf`);
       }
       toast.success("PDF downloaded");
     } catch (e) { toast.error(formatApiError(e)); }
@@ -413,11 +420,11 @@ export default function Reports() {
         url = "/reports/attendance.pdf"; params = { batch_id: attBatch, start: attStart, end: attEnd };
         filename = `attendance_${attStart}_${attEnd}.pdf`; title = "Attendance Report";
       } else if (kind === "fees") {
-        url = "/reports/fees.pdf"; params = { batch_id: feeBatch, month: feeMonth };
-        filename = `fees_${feeMonth}.pdf`; title = "Fees Report";
+        url = "/reports/fees.pdf"; params = { batch_id: feeBatch, start_month: feeStartMonth, end_month: feeEndMonth };
+        filename = `fees_${feeStartMonth}_${feeEndMonth}.pdf`; title = "Fees Report";
       } else {
-        url = "/reports/expenses.pdf"; params = { month: expMonth };
-        filename = `expenses_${expMonth}.pdf`; title = "Expenses Report";
+        url = "/reports/expenses.pdf"; params = { start_month: expStartMonth, end_month: expEndMonth };
+        filename = `expenses_${expStartMonth}_${expEndMonth}.pdf`; title = "Expenses Report";
       }
       const res = await api.get(url, { params, responseType: "blob" });
       const blob = new Blob([res.data], { type: "application/pdf" });
@@ -461,7 +468,7 @@ export default function Reports() {
           </div>
         </Section>
 
-        <Section icon={IndianRupee} title="Fee Collection Report" subtitle="Paid/unpaid breakdown for a specific month">
+        <Section icon={IndianRupee} title="Fee Collection Report" subtitle="Paid + balance carry-forward over a month range">
           <div className="space-y-3">
             <div>
               <label className="edu-label">Batch</label>
@@ -469,9 +476,15 @@ export default function Reports() {
                 {batches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
               </select>
             </div>
-            <div>
-              <label className="edu-label">Month</label>
-              <input type="month" data-testid="fee-report-month" value={feeMonth} onChange={(e) => setFeeMonth(e.target.value)} className="edu-input" />
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="edu-label">From month</label>
+                <input type="month" data-testid="fee-report-start-month" value={feeStartMonth} onChange={(e) => setFeeStartMonth(e.target.value)} className="edu-input" />
+              </div>
+              <div>
+                <label className="edu-label">To month</label>
+                <input type="month" data-testid="fee-report-end-month" value={feeEndMonth} onChange={(e) => setFeeEndMonth(e.target.value)} className="edu-input" />
+              </div>
             </div>
             <div className="flex gap-2 pt-1">
               <button onClick={() => download("fees")} data-testid="fee-report-download" className="btn-primary flex-1"><Download className="w-4 h-4" /> Download</button>
@@ -480,11 +493,17 @@ export default function Reports() {
           </div>
         </Section>
 
-        <Section icon={Receipt} title="Expense Report" subtitle="All expenses for a month">
+        <Section icon={Receipt} title="Expense Report" subtitle="Expenses across a month range, grouped by month">
           <div className="space-y-3">
-            <div>
-              <label className="edu-label">Month</label>
-              <input type="month" data-testid="exp-report-month" value={expMonth} onChange={(e) => setExpMonth(e.target.value)} className="edu-input" />
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="edu-label">From month</label>
+                <input type="month" data-testid="exp-report-start-month" value={expStartMonth} onChange={(e) => setExpStartMonth(e.target.value)} className="edu-input" />
+              </div>
+              <div>
+                <label className="edu-label">To month</label>
+                <input type="month" data-testid="exp-report-end-month" value={expEndMonth} onChange={(e) => setExpEndMonth(e.target.value)} className="edu-input" />
+              </div>
             </div>
             <div className="flex gap-2 pt-1">
               <button onClick={() => download("expenses")} data-testid="exp-report-download" className="btn-primary flex-1"><Download className="w-4 h-4" /> Download</button>

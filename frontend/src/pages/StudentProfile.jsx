@@ -33,8 +33,10 @@ export default function StudentProfile() {
   if (!data) return <Layout title="Loading…"><Loading /></Layout>;
 
   const { student, batch, attendance_summary, attendance_records, fees, expected_monthly_fee, total_paid,
-          list_monthly_fee, discount_savings, discount_percent, discount_reason } = data;
+          list_monthly_fee, discount_savings, discount_percent, discount_reason,
+          balance_to_date, joining_month, months_active } = data;
   const hasDiscount = (discount_savings || 0) > 0;
+  const balance = Number(balance_to_date || 0);
 
   const sendParentWhatsApp = () => {
     const phone = student.parent_phone || student.phone;
@@ -81,7 +83,7 @@ export default function StudentProfile() {
       </div>
 
       {/* Stat grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
         <div className="edu-card" data-testid="stat-attendance-percent">
           <div className="text-[11px] font-semibold uppercase tracking-wider text-edu-on-variant">Attendance</div>
           <div className="text-[28px] font-bold tabular-nums mt-1 text-edu-primary">{attendance_summary.percent}%</div>
@@ -110,6 +112,17 @@ export default function StudentProfile() {
               {student.monthly_fee ? "Custom" : "From batch"}
             </div>
           )}
+        </div>
+        <div className="edu-card" data-testid="profile-balance-tile">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-edu-on-variant">
+            {balance >= 0 ? "Balance due" : "Advance held"}
+          </div>
+          <div className={`text-[28px] font-bold tabular-nums mt-1 ${balance > 0 ? "text-edu-error" : "text-[#15803d]"}`}>
+            {balance === 0 ? inr(0) : balance > 0 ? inr(balance) : `+${inr(-balance)}`}
+          </div>
+          <div className="text-[12px] text-edu-on-variant mt-1">
+            Since {joining_month || "—"} · {months_active || 0} mo active
+          </div>
         </div>
         <div className="edu-card">
           <div className="text-[11px] font-semibold uppercase tracking-wider text-edu-on-variant">Total paid</div>

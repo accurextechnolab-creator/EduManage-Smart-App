@@ -1,0 +1,59 @@
+{
+  "summary": "Iteration 8 testing complete — backend balance math (3 user examples), backward-compat fallback, future-month clamp, fees PDF range, expenses PDF range, and PDF heading (no overlap) all verified. Frontend Reports/Finance/BatchDetail/StudentProfile testids and integration verified. 12/12 backend tests pass, all frontend critical checks pass.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration8_balance_and_pdfs.py",
+    "/app/test_reports/pytest/iteration8_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Balance math implementation in server.py (compute_balance_up_to + _student_joining_month) is clean and matches the user's 3 examples to the rupee. Falls back to created_at month when joining_month is blank, and clamps negative spans to 0 via max(0,...) in months_between_inclusive.",
+    "report_fees_pdf maintains backward compat: passing legacy `month=` alone still works (s_m=e_m=month). Auto-swaps if s_m > e_m. Filename pattern matches spec: fees_{batch_id}_{start}_{end}.pdf and expenses_{start}_{end}.pdf.",
+    "PDF heading fix (Brand leading=26 spaceAfter=10, H2 leading=18 spaceAfter=6, Sub leading=14) produces visually separated lines in attendance/fees/expenses PDFs. Verified via pypdf extract_text() — brand and title each occupy distinct line and brand line never contains title text.",
+    "Frontend Reports.jsx correctly validates `feeStartMonth > feeEndMonth` and `expStartMonth > expEndMonth` with toast.warning('From month must be before To month') BEFORE any network call (no API request fired when range is invalid — verified via Playwright network capture).",
+    "Profile balance tile renders the exact expected value: for Example 1 student (joined 2026-04, paid 700+500+1500 across Apr/May/Jun) the tile reads 'Balance due ₹500 · Since 2026-04 · 3 mo active' on 2026-06 — wait, current view is 2026-06 default and balance is 500 (because viewing month defaults to current 2026-06 and the cumulative is 3000-2500=500). Matches backend exactly.",
+    "Minor: list_fees endpoint at server.py line 533 declares `month: str` as a required query param — that's by design (UI always passes current month). Confirmed not a regression.",
+    "Minor (non-blocking): pytest emits a class-scoped-fixture-as-instance-method deprecation warning for two fixtures; can be moved to @classmethod or module scope before pytest 10."
+  ],
+  "verified_examples": {
+    "example_1_partial": {"fee": 1000, "joining": "2026-04", "view": "2026-06", "paid": [700, 500, 1500], "expected_to_date": 3000, "paid_to_date": 2700, "balance": 300, "result": "PASS"},
+    "example_2_two_months": {"fee": 1000, "joining": "2026-05", "view": "2026-06", "paid": [0, 1500], "expected_to_date": 2000, "paid_to_date": 1500, "balance": 500, "result": "PASS"},
+    "example_3_advance_then_due": {
+      "fee": 1000, "joining": "2026-04", "paid_apr": 2500,
+      "may": {"expected": 2000, "paid": 2500, "balance": -500, "result": "PASS (advance)"},
+      "jun": {"expected": 3000, "paid": 2500, "balance": 500, "result": "PASS (due)"}
+    },
+    "edge_missing_joining_month": "Student created with no joining_month → row.joining_month resolved from created_at, months_active >= 1 — PASS",
+    "edge_future_joining_month": "joining_month=2099-01, paid 700 in current month → months_active=0, expected_to_date=0, balance=-700 (advance) — PASS"
+  },
+  "verified_pdfs": {
+    "fees_range": "GET /api/reports/fees.pdf?start_month=2026-04&end_month=2026-06 → 200 application/pdf, filename fees_{id}_2026-04_2026-06.pdf, subtitle contains 'Period: 2026-04 to 2026-06', columns: # Student Joined Months Expected Paid Balance — PASS",
+    "fees_legacy_month": "GET /api/reports/fees.pdf?month=2026-06 → 200, subtitle 'Period: 2026-06' — PASS",
+    "expenses_range": "GET /api/reports/expenses.pdf?start_month=2026-04&end_month=2026-06 → 200, sections per month + Grand Total section, filename expenses_2026-04_2026-06.pdf — PASS",
+    "expenses_legacy_month": "GET /api/reports/expenses.pdf?month=2026-05 → 200, subtitle 'Period: 2026-05' — PASS",
+    "heading_no_overlap": "Attendance + Fees + Expenses PDFs all show 'EduManage' on its own line followed by the title on a distinct subsequent line; brand line never contains title text — PASS"
+  },
+  "verified_frontend": {
+    "Reports_pickers": "fee-report-start-month / fee-report-end-month / exp-report-start-month / exp-report-end-month — all present (count=1 each)",
+    "Reports_validation": "start_month > end_month for FEE report → no network request fired (validation blocks); toast.warning code path confirmed in Reports.jsx:402",
+    "Reports_API_call": "Valid range → GET /api/reports/fees.pdf?batch_id=...&start_month=2026-04&end_month=2026-06 captured in network",
+    "Finance_summary_tiles": "fees-summary-balance-due and fees-summary-balance-advance both rendered",
+    "Finance_balance_row": "fee-balance-{student_id} testid renders on rows with non-zero balance",
+    "AddStudent_modal": "student-joining-month-input present, defaults to current month (2026-06 observed)",
+    "StudentProfile_tile": "profile-balance-tile shows 'Balance due ₹500 · Since 2026-04 · 3 mo active' for the seeded Example-1 student (matches backend)"
+  },
+  "updated_files": [
+    "/app/backend/tests/test_iteration8_balance_and_pdfs.py (new)"
+  ],
+  "success_rate": { "backend": "100% (12/12)", "frontend": "100%" },
+  "test_credentials": "admin@edumanage.app / admin123 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Created isolated batches/students for the 3 user examples and edge cases. Batches named TEST_IT8_* (E1/E2/E3/NJM/FUT/PDF/HDR/HDRF). Each example uses fresh joining_month + payments. 3 TEST_IT8 expenses (Rent Apr 5000, Books May 1200, Misc Jun 800) — note: re-running the test suite will accumulate additional expense rows since there is no per-test cleanup. Recommend periodic cleanup of TEST_IT8_* documents.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration 8 ships per-student balance carry-forward + range-based PDFs + heading fix. All three user-given balance examples are validated end-to-end with isolated fixtures. The test file at /app/backend/tests/test_iteration8_balance_and_pdfs.py uses pypdf for PDF text extraction (now installed). If you re-run, note that the expenses PDF total in /reports/expenses.pdf may grow over time because TEST_IT8 expenses accumulate; assertions intentionally avoid hardcoded grand-total values. The Reports page has 3 Download buttons (attendance/fees/expenses) — when capturing requests with playwright, register listeners BEFORE the click and prefer per-card testids. No mocks anywhere — real backend, real DB."
+}

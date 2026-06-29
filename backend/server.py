@@ -96,6 +96,7 @@ class StudentIn(BaseModel):
     discount_amount: Optional[float] = 0.0   # ₹ off per month
     discount_percent: Optional[float] = 0.0  # % off per month
     discount_reason: Optional[str] = ""      # e.g. Sibling, Scholarship, ...
+    joining_month: Optional[str] = ""        # YYYY-MM, for fee balance carry-forward
 
 
 class AttendanceMark(BaseModel):
@@ -261,6 +262,55 @@ def compute_fee_breakdown(student: dict, batch: dict) -> dict:
     }
 
 
+def _ym_parts(ym: str) -> tuple:
+    """Parse 'YYYY-MM' → (year, month). Returns (0,0) if invalid."""
+    try:
+        y, m = ym.split("-")
+        return int(y), int(m)
+    except (ValueError, AttributeError):
+        return 0, 0
+
+
+def months_between_inclusive(start_ym: str, end_ym: str) -> int:
+    """Number of months from start_ym to end_ym, inclusive. Returns 0 if start > end."""
+    sy, sm = _ym_parts(start_ym)
+    ey, em = _ym_parts(end_ym)
+    if sy == 0 or ey == 0:
+        return 0
+    return max(0, (ey - sy) * 12 + (em - sm) + 1)
+
+
+def _student_joining_month(student: dict) -> str:
+    """Resolve the effective joining month for a student. Falls back to created_at month."""
+    jm = (student.get("joining_month") or "").strip()
+    if jm:
+        return jm[:7]
+    created = student.get("created_at") or ""
+    return created[:7] if created else ""
+
+
+def compute_balance_up_to(student: dict, batch: dict, view_month: str, all_fees: list) -> dict:
+    """Compute cumulative fee balance for a student up to and including view_month.
+    `all_fees` is the student's fee records (any month). Uses current final fee for all months.
+    """
+    final_fee = compute_fee_breakdown(student, batch)["final"]
+    joining = _student_joining_month(student) or view_month
+    months_active = months_between_inclusive(joining, view_month)
+    expected_to_date = final_fee * months_active
+    paid_to_date = sum(
+        float(f.get("amount", 0) or 0)
+        for f in all_fees
+        if (f.get("month") or "") <= view_month
+    )
+    return {
+        "joining_month": joining,
+        "months_active": months_active,
+        "expected_to_date": expected_to_date,
+        "paid_to_date": paid_to_date,
+        "balance": expected_to_date - paid_to_date,
+    }
+
+
 # ---------- Batches ----------
 @api.get("/batches")
 async def list_batches(user: dict = Depends(get_current_user)):
@@ -383,6 +433,9 @@ async def student_history(student_id: str, user: dict = Depends(get_current_user
     breakdown = compute_fee_breakdown(s, batch or {})
     expected = breakdown["final"]
     total_paid = sum(f.get("amount", 0) for f in fees)
+    # Balance as of current month (cumulative)
+    now_ym = date.today().isoformat()[:7]
+    bal = compute_balance_up_to(s, batch or {}, now_ym, fees)
 
     return {
         "student": serialize_doc(s),
@@ -407,6 +460,10 @@ async def student_history(student_id: str, user: dict = Depends(get_current_user
         "discount_savings": max(0.0, breakdown["list_fee"] - breakdown["final"]),
         "default_batch_fee": default_fee,
         "total_paid": total_paid,
+        "joining_month": bal["joining_month"],
+        "months_active": bal["months_active"],
+        "expected_to_date": bal["expected_to_date"],
+        "balance_to_date": bal["balance"],
     }
 
 
@@ -478,13 +535,23 @@ async def list_fees(batch_id: str, month: str, user: dict = Depends(get_current_
     batch = await db.batches.find_one({"_id": parse_oid(batch_id)})
     require_owner(batch, user["_id"])
     students = await db.students.find({"batch_id": batch_id, "user_id": user["_id"]}).sort("name", 1).to_list(1000)
-    fees = await db.fees.find({"batch_id": batch_id, "user_id": user["_id"], "month": month}).to_list(2000)
-    fee_map = {f["student_id"]: serialize_doc(f) for f in fees}
+    # Fetch all fees up to and including the requested month for carry-forward balance
+    fees_all = await db.fees.find({
+        "batch_id": batch_id, "user_id": user["_id"],
+        "month": {"$lte": month},
+    }).to_list(20000)
+    fees_by_student = {}
+    fee_map_current = {}
+    for f in fees_all:
+        fees_by_student.setdefault(f["student_id"], []).append(f)
+        if f.get("month") == month:
+            fee_map_current[f["student_id"]] = serialize_doc(f)
     rows = []
     for s in students:
         sid = str(s["_id"])
         bd = compute_fee_breakdown(s, batch)
-        f = fee_map.get(sid)
+        f = fee_map_current.get(sid)
+        bal = compute_balance_up_to(s, batch, month, fees_by_student.get(sid, []))
         rows.append({
             "student": serialize_doc(s),
             "expected": bd["final"],
@@ -497,6 +564,11 @@ async def list_fees(batch_id: str, month: str, user: dict = Depends(get_current_
             "paid_on": f.get("paid_on") if f else None,
             "note": f.get("note", "") if f else "",
             "status": "paid" if f and f.get("amount", 0) > 0 else "unpaid",
+            "joining_month": bal["joining_month"],
+            "months_active": bal["months_active"],
+            "expected_to_date": bal["expected_to_date"],
+            "paid_to_date": bal["paid_to_date"],
+            "balance": bal["balance"],
         })
     return {"batch": serialize_doc(batch), "month": month, "rows": rows}
 
@@ -612,9 +684,18 @@ async def dashboard_stats(user: dict = Depends(get_current_user)):
 # ---------- PDF Reports ----------
 def _pdf_styles():
     styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(name="Brand", fontName="Helvetica-Bold", fontSize=20, textColor=colors.HexColor("#003fb1")))
-    styles.add(ParagraphStyle(name="Sub", fontName="Helvetica", fontSize=11, textColor=colors.HexColor("#434654")))
-    styles.add(ParagraphStyle(name="H2", fontName="Helvetica-Bold", fontSize=14, textColor=colors.HexColor("#191b23"), spaceAfter=6))
+    styles.add(ParagraphStyle(
+        name="Brand", fontName="Helvetica-Bold", fontSize=20,
+        leading=26, spaceAfter=10, textColor=colors.HexColor("#003fb1"),
+    ))
+    styles.add(ParagraphStyle(
+        name="Sub", fontName="Helvetica", fontSize=11,
+        leading=14, spaceAfter=4, textColor=colors.HexColor("#434654"),
+    ))
+    styles.add(ParagraphStyle(
+        name="H2", fontName="Helvetica-Bold", fontSize=14,
+        leading=18, spaceAfter=6, textColor=colors.HexColor("#191b23"),
+    ))
     return styles
 
 
@@ -679,61 +760,161 @@ async def report_attendance_pdf(batch_id: str, start: str, end: str, user: dict 
     return _pdf_response(f"attendance_{batch_id}_{start}_{end}.pdf", pdf)
 
 
+def _enumerate_months_inclusive(start_ym: str, end_ym: str) -> list:
+    """Return a list of YYYY-MM strings from start to end inclusive."""
+    sy, sm = _ym_parts(start_ym)
+    ey, em = _ym_parts(end_ym)
+    if sy == 0 or ey == 0:
+        return []
+    out = []
+    y, m = sy, sm
+    while (y, m) <= (ey, em):
+        out.append(f"{y:04d}-{m:02d}")
+        m += 1
+        if m == 13:
+            m = 1
+            y += 1
+    return out
+
+
 @api.get("/reports/fees.pdf")
-async def report_fees_pdf(batch_id: str, month: str, user: dict = Depends(get_current_user)):
-    data = await list_fees(batch_id=batch_id, month=month, user=user)
-    batch = data["batch"]
-    rows = [["#", "Student", "Code", "List Fee", "Discount", "Final Fee", "Paid", "Status"]]
-    total_list = 0.0
-    total_discount = 0.0
-    total_expected = 0.0
-    total_paid = 0.0
-    for i, r in enumerate(data["rows"], 1):
-        s = r["student"]
-        list_fee = float(r.get("list_fee", r["expected"]) or 0)
-        savings = float(r.get("discount_savings", 0) or 0)
-        pct = r.get("discount_percent") or 0
-        disc_label = "-"
-        if savings > 0:
-            disc_label = f"-Rs. {savings:.0f}" + (f" ({pct:.0f}%)" if pct else "")
-        total_list += list_fee
-        total_discount += savings
-        total_expected += r["expected"] or 0
-        total_paid += r["paid"] or 0
+async def report_fees_pdf(
+    batch_id: str,
+    user: dict = Depends(get_current_user),
+    month: Optional[str] = None,        # legacy single-month
+    start_month: Optional[str] = None,  # YYYY-MM
+    end_month: Optional[str] = None,    # YYYY-MM
+):
+    # Resolve range (backward compatible)
+    s_m = start_month or month
+    e_m = end_month or month
+    if not s_m or not e_m:
+        raise HTTPException(status_code=400, detail="Provide month or start_month + end_month")
+    if s_m > e_m:
+        s_m, e_m = e_m, s_m
+
+    batch = await db.batches.find_one({"_id": parse_oid(batch_id)})
+    require_owner(batch, user["_id"])
+    students = await db.students.find({"batch_id": batch_id, "user_id": user["_id"]}).sort("name", 1).to_list(1000)
+
+    # All fees for these students up to and including end_month (for balance carry-forward)
+    fees_all = await db.fees.find({
+        "batch_id": batch_id, "user_id": user["_id"],
+        "month": {"$lte": e_m},
+    }).to_list(50000)
+    fees_by_student = {}
+    for f in fees_all:
+        fees_by_student.setdefault(f["student_id"], []).append(f)
+
+    rows = [["#", "Student", "Joined", "Months", "Expected (Rs.)", "Paid in range (Rs.)", "Balance (Rs.)"]]
+    sum_expected = 0.0
+    sum_paid_range = 0.0
+    sum_balance = 0.0
+    for i, s in enumerate(students, 1):
+        sid = str(s["_id"])
+        bd = compute_fee_breakdown(s, batch)
+        bal = compute_balance_up_to(s, batch, e_m, fees_by_student.get(sid, []))
+        joining = bal["joining_month"]
+        # Months in selected range that are >= joining month
+        months_in_range_active = [m for m in _enumerate_months_inclusive(s_m, e_m) if m >= joining]
+        expected_in_range = bd["final"] * len(months_in_range_active)
+        paid_in_range = sum(
+            float(f.get("amount", 0) or 0)
+            for f in fees_by_student.get(sid, [])
+            if s_m <= (f.get("month") or "") <= e_m
+        )
+        balance = bal["balance"]
+        sum_expected += expected_in_range
+        sum_paid_range += paid_in_range
+        sum_balance += balance
         rows.append([
-            str(i), s.get("name", ""), s.get("student_code", ""),
-            f"{list_fee:.0f}", disc_label, f"{r['expected']:.0f}",
-            f"{r['paid']:.0f}", r["status"].title(),
+            str(i), s.get("name", ""),
+            joining or "-",
+            str(len(months_in_range_active)),
+            f"{expected_in_range:.0f}",
+            f"{paid_in_range:.0f}",
+            f"{balance:.0f}",
         ])
     rows.append([
-        "", "TOTAL", "",
-        f"{total_list:.0f}",
-        f"-Rs. {total_discount:.0f}" if total_discount > 0 else "-",
-        f"{total_expected:.0f}", f"{total_paid:.0f}", "",
+        "", "TOTAL", "", "",
+        f"{sum_expected:.0f}",
+        f"{sum_paid_range:.0f}",
+        f"{sum_balance:.0f}",
     ])
+
+    range_label = s_m if s_m == e_m else f"{s_m} to {e_m}"
     pdf = _build_pdf(
         title=f"Fee Collection Report — {batch.get('name', '')}",
-        subtitle=f"Month: {month}",
-        sections=[{"heading": "Fee Status", "table": rows}],
+        subtitle=f"Period: {range_label} · Balance shown as of {e_m}",
+        sections=[{"heading": "Fee Status & Balance", "table": rows}],
     )
-    return _pdf_response(f"fees_{batch_id}_{month}.pdf", pdf)
+    return _pdf_response(f"fees_{batch_id}_{s_m}_{e_m}.pdf", pdf)
 
 
 @api.get("/reports/expenses.pdf")
-async def report_expenses_pdf(month: Optional[str] = None, user: dict = Depends(get_current_user)):
-    data = await list_expenses(month=month, user=user)
-    rows = [["#", "Date", "Title", "Category", "Amount (Rs.)"]]
-    total = 0
-    for i, e in enumerate(data, 1):
-        total += e.get("amount", 0)
-        rows.append([str(i), e.get("date", ""), e.get("title", ""), e.get("category", ""), f"{e.get('amount', 0):.0f}"])
-    rows.append(["", "", "", "TOTAL", f"{total:.0f}"])
+async def report_expenses_pdf(
+    user: dict = Depends(get_current_user),
+    month: Optional[str] = None,        # legacy single-month
+    start_month: Optional[str] = None,  # YYYY-MM
+    end_month: Optional[str] = None,    # YYYY-MM
+):
+    s_m = start_month or month
+    e_m = end_month or month
+    if s_m and e_m and s_m > e_m:
+        s_m, e_m = e_m, s_m
+
+    q = {"user_id": user["_id"]}
+    if s_m and e_m:
+        # date is YYYY-MM-DD; match by month prefix range
+        q["date"] = {"$gte": f"{s_m}-01", "$lte": f"{e_m}-31"}
+    docs = await db.expenses.find(q).sort("date", 1).to_list(20000)
+
+    # Group by month
+    by_month = {}
+    for e in docs:
+        key = (e.get("date") or "")[:7]
+        by_month.setdefault(key, []).append(e)
+    months_sorted = sorted(by_month.keys())
+
+    sections = []
+    grand_total = 0.0
+    for m_key in months_sorted:
+        items = by_month[m_key]
+        rows = [["#", "Date", "Title", "Category", "Amount (Rs.)"]]
+        month_total = 0.0
+        for i, e in enumerate(items, 1):
+            amt = float(e.get("amount", 0) or 0)
+            month_total += amt
+            rows.append([
+                str(i), e.get("date", ""), e.get("title", ""),
+                e.get("category", ""), f"{amt:.0f}",
+            ])
+        rows.append(["", "", "", "Month total", f"{month_total:.0f}"])
+        grand_total += month_total
+        sections.append({"heading": f"Expenses — {m_key}", "table": rows})
+
+    if not sections:
+        sections = [{"heading": "Expenses", "table": [["No expenses recorded in this period."]]}]
+    else:
+        sections.append({
+            "heading": "Grand Total",
+            "table": [["Total expenses for period", f"Rs. {grand_total:.0f}"]],
+        })
+
+    if s_m and e_m:
+        range_label = s_m if s_m == e_m else f"{s_m} to {e_m}"
+        subtitle = f"Period: {range_label}"
+        filename = f"expenses_{s_m}_{e_m}.pdf"
+    else:
+        subtitle = "All time"
+        filename = "expenses_all.pdf"
+
     pdf = _build_pdf(
         title="Expense Report",
-        subtitle=f"Month: {month}" if month else "All time",
-        sections=[{"heading": "Expenses", "table": rows}],
+        subtitle=subtitle,
+        sections=sections,
     )
-    return _pdf_response(f"expenses_{month or 'all'}.pdf", pdf)
+    return _pdf_response(filename, pdf)
 
 
 # ---------- Yearly Summary (P3.5) ----------
