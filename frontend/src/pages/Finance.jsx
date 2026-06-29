@@ -137,7 +137,7 @@ Thank you!`;
           <button onClick={openBulk} data-testid="bulk-remind-btn"
                   className="btn-primary sm:ml-auto"
                   style={{ background: "#15803d" }}>
-            <Send className="w-4 h-4" /> Send {unpaidWithPhone.length} reminders
+            <Send className="w-4 h-4" /> Send {unpaidWithPhone.length} reminder{unpaidWithPhone.length === 1 ? "" : "s"}
           </button>
         )}
       </div>
