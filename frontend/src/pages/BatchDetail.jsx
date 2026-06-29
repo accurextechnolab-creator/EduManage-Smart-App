@@ -6,7 +6,9 @@ import { api, formatApiError, todayISO } from "@/lib/api";
 import Layout from "@/components/Layout";
 import { Initials, Loading } from "@/components/ui-edu";
 
-const blankStudent = { name: "", student_code: "", phone: "", parent_name: "", parent_phone: "", monthly_fee: 0 };
+const blankStudent = { name: "", student_code: "", phone: "", parent_name: "", parent_phone: "", monthly_fee: 0, discount_amount: 0, discount_percent: 0, discount_reason: "" };
+
+const DISCOUNT_REASONS = ["", "Sibling", "Scholarship", "Financial Aid", "Early Bird", "Referral", "Other"];
 
 export default function BatchDetail() {
   const { id } = useParams();
@@ -17,10 +19,11 @@ export default function BatchDetail() {
   const [tab, setTab] = useState("attendance");
   const [modal, setModal] = useState(null); // null | { mode: 'add' | 'edit', id?, ...form }
   const [saving, setSaving] = useState(false);
-
+  const [batchFee, setBatchFee] = useState(0); // for discount preview
   const loadBatch = async () => {
     const { data } = await api.get(`/batches/${id}`);
     setBatch(data);
+    setBatchFee(Number(data?.monthly_fee) || 0);
   };
   const loadAttendance = async () => {
     const { data } = await api.get(`/attendance`, { params: { batch_id: id, date } });
@@ -75,20 +78,31 @@ export default function BatchDetail() {
     setSaving(false);
   };
 
-  const openAdd = () => setModal({ mode: "add", ...blankStudent });
-  const openEdit = (s) => setModal({
-    mode: "edit", id: s.id,
-    name: s.name || "", student_code: s.student_code || "", phone: s.phone || "",
-    parent_name: s.parent_name || "", parent_phone: s.parent_phone || "",
-    monthly_fee: s.monthly_fee || 0,
-  });
+  const openAdd = () => setModal({ mode: "add", ...blankStudent, reason_other: "" });
+  const openEdit = (s) => {
+    const reasonInList = DISCOUNT_REASONS.includes(s.discount_reason || "");
+    setModal({
+      mode: "edit", id: s.id,
+      name: s.name || "", student_code: s.student_code || "", phone: s.phone || "",
+      parent_name: s.parent_name || "", parent_phone: s.parent_phone || "",
+      monthly_fee: s.monthly_fee || 0,
+      discount_amount: s.discount_amount || 0,
+      discount_percent: s.discount_percent || 0,
+      discount_reason: reasonInList ? (s.discount_reason || "") : "Other",
+      reason_other: reasonInList ? "" : (s.discount_reason || ""),
+    });
+  };
 
   const submitStudent = async (e) => {
     e.preventDefault();
+    const reason = modal.discount_reason === "Other" ? (modal.reason_other || "Other") : modal.discount_reason;
     const payload = {
       name: modal.name, student_code: modal.student_code, phone: modal.phone,
       parent_name: modal.parent_name, parent_phone: modal.parent_phone,
       monthly_fee: Number(modal.monthly_fee) || 0,
+      discount_amount: Number(modal.discount_amount) || 0,
+      discount_percent: Number(modal.discount_percent) || 0,
+      discount_reason: reason || "",
     };
     try {
       if (modal.mode === "edit") {
@@ -278,10 +292,80 @@ export default function BatchDetail() {
                 </div>
               </div>
               <div>
-                <label className="edu-label">Custom Monthly Fee (₹)</label>
+                <label className="edu-label">Override monthly fee (₹, optional)</label>
                 <input type="number" min="0" data-testid="student-fee-input" value={modal.monthly_fee}
                        onChange={(e) => setModal({ ...modal, monthly_fee: e.target.value })}
                        placeholder="0 = use batch default" className="edu-input" />
+              </div>
+
+              {/* Discount block */}
+              <div className="border-t border-edu-outline-variant pt-3 mt-1">
+                <div className="text-[11px] font-semibold uppercase tracking-wider text-edu-on-variant mb-2">
+                  Discount (optional)
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="edu-label">Amount off (₹)</label>
+                    <input type="number" min="0" step="any"
+                           data-testid="student-discount-amount-input"
+                           value={modal.discount_amount}
+                           onChange={(e) => setModal({ ...modal, discount_amount: e.target.value })}
+                           placeholder="e.g. 300" className="edu-input" />
+                  </div>
+                  <div>
+                    <label className="edu-label">Percent off (%)</label>
+                    <input type="number" min="0" max="100" step="any"
+                           data-testid="student-discount-percent-input"
+                           value={modal.discount_percent}
+                           onChange={(e) => setModal({ ...modal, discount_percent: e.target.value })}
+                           placeholder="e.g. 20" className="edu-input" />
+                  </div>
+                </div>
+                <div className="mt-3">
+                  <label className="edu-label">Reason</label>
+                  <select data-testid="student-discount-reason-select"
+                          value={modal.discount_reason}
+                          onChange={(e) => setModal({ ...modal, discount_reason: e.target.value })}
+                          className="edu-input">
+                    <option value="">— None —</option>
+                    {DISCOUNT_REASONS.filter((r) => r).map((r) =>
+                      <option key={r} value={r}>{r}</option>)}
+                  </select>
+                </div>
+                {modal.discount_reason === "Other" && (
+                  <div className="mt-3">
+                    <label className="edu-label">Custom reason</label>
+                    <input data-testid="student-discount-reason-other-input"
+                           value={modal.reason_other || ""}
+                           onChange={(e) => setModal({ ...modal, reason_other: e.target.value })}
+                           placeholder="e.g. Long-term commitment" className="edu-input" />
+                  </div>
+                )}
+                {(() => {
+                  const base = Number(modal.monthly_fee) || batchFee || 0;
+                  const amt = Number(modal.discount_amount) || 0;
+                  const pct = Number(modal.discount_percent) || 0;
+                  const savings = Math.max(0, amt + base * pct / 100);
+                  const final = Math.max(0, base - savings);
+                  if (base === 0) return null;
+                  return (
+                    <div className="mt-3 bg-edu-surface-low rounded-[6px] px-3 py-2 flex items-center justify-between"
+                         data-testid="student-discount-preview">
+                      <div>
+                        <div className="text-[11px] uppercase tracking-wider text-edu-on-variant">Final monthly fee</div>
+                        <div className="font-bold text-[18px] tabular-nums">₹{final.toLocaleString("en-IN", { maximumFractionDigits: 0 })}</div>
+                      </div>
+                      {savings > 0 && (
+                        <div className="text-right">
+                          <div className="text-[11px] uppercase tracking-wider text-edu-on-variant">You save</div>
+                          <div className="font-semibold text-[14px] text-[#15803d] tabular-nums">
+                            ₹{savings.toLocaleString("en-IN", { maximumFractionDigits: 0 })}/mo
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
               <div className="flex gap-2 pt-2">
                 <button type="button" onClick={() => setModal(null)} className="btn-ghost flex-1">Cancel</button>

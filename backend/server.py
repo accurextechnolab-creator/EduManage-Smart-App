@@ -93,6 +93,9 @@ class StudentIn(BaseModel):
     parent_name: Optional[str] = ""
     parent_phone: Optional[str] = ""
     monthly_fee: Optional[float] = None  # override batch fee
+    discount_amount: Optional[float] = 0.0   # ₹ off per month
+    discount_percent: Optional[float] = 0.0  # % off per month
+    discount_reason: Optional[str] = ""      # e.g. Sibling, Scholarship, ...
 
 
 class AttendanceMark(BaseModel):
@@ -238,6 +241,26 @@ def parse_oid(value: str) -> ObjectId:
         raise HTTPException(status_code=404, detail="Not found")
 
 
+def compute_fee_breakdown(student: dict, batch: dict) -> dict:
+    """Returns { list_fee, discount_amount, discount_percent, discount_reason, final }.
+    `final` is the per-month expected fee after applying both fixed and percentage discounts.
+    """
+    default_fee = (batch or {}).get("monthly_fee", 0) or 0
+    override = student.get("monthly_fee")
+    list_fee = float(override) if override not in (None, 0) else float(default_fee)
+    disc_amt = float(student.get("discount_amount", 0) or 0)
+    disc_pct = float(student.get("discount_percent", 0) or 0)
+    pct_off = list_fee * (disc_pct / 100.0) if disc_pct else 0.0
+    final = max(0.0, list_fee - disc_amt - pct_off)
+    return {
+        "list_fee": list_fee,
+        "discount_amount": disc_amt,
+        "discount_percent": disc_pct,
+        "discount_reason": student.get("discount_reason", "") or "",
+        "final": final,
+    }
+
+
 # ---------- Batches ----------
 @api.get("/batches")
 async def list_batches(user: dict = Depends(get_current_user)):
@@ -357,7 +380,8 @@ async def student_history(student_id: str, user: dict = Depends(get_current_user
     }).sort("month", -1).to_list(2000)
 
     default_fee = batch.get("monthly_fee", 0) if batch else 0
-    expected = s.get("monthly_fee") if s.get("monthly_fee") not in (None, 0) else default_fee
+    breakdown = compute_fee_breakdown(s, batch or {})
+    expected = breakdown["final"]
     total_paid = sum(f.get("amount", 0) for f in fees)
 
     return {
@@ -376,6 +400,12 @@ async def student_history(student_id: str, user: dict = Depends(get_current_user
             } for f in fees
         ],
         "expected_monthly_fee": expected,
+        "list_monthly_fee": breakdown["list_fee"],
+        "discount_amount": breakdown["discount_amount"],
+        "discount_percent": breakdown["discount_percent"],
+        "discount_reason": breakdown["discount_reason"],
+        "discount_savings": max(0.0, breakdown["list_fee"] - breakdown["final"]),
+        "default_batch_fee": default_fee,
         "total_paid": total_paid,
     }
 
@@ -450,15 +480,19 @@ async def list_fees(batch_id: str, month: str, user: dict = Depends(get_current_
     students = await db.students.find({"batch_id": batch_id, "user_id": user["_id"]}).sort("name", 1).to_list(1000)
     fees = await db.fees.find({"batch_id": batch_id, "user_id": user["_id"], "month": month}).to_list(2000)
     fee_map = {f["student_id"]: serialize_doc(f) for f in fees}
-    default_fee = batch.get("monthly_fee", 0) or 0
     rows = []
     for s in students:
         sid = str(s["_id"])
-        student_fee = s.get("monthly_fee") if s.get("monthly_fee") not in (None, 0) else default_fee
+        bd = compute_fee_breakdown(s, batch)
         f = fee_map.get(sid)
         rows.append({
             "student": serialize_doc(s),
-            "expected": student_fee,
+            "expected": bd["final"],
+            "list_fee": bd["list_fee"],
+            "discount_amount": bd["discount_amount"],
+            "discount_percent": bd["discount_percent"],
+            "discount_reason": bd["discount_reason"],
+            "discount_savings": max(0.0, bd["list_fee"] - bd["final"]),
             "paid": f.get("amount", 0) if f else 0,
             "paid_on": f.get("paid_on") if f else None,
             "note": f.get("note", "") if f else "",
@@ -552,14 +586,14 @@ async def dashboard_stats(user: dict = Depends(get_current_user)):
     expenses = await db.expenses.find({"user_id": user["_id"], "date": {"$regex": f"^{month}"}}).to_list(5000)
     expenses_total = sum(e.get("amount", 0) for e in expenses)
 
-    # Expected fees this month (sum of monthly_fee per active student)
+    # Expected fees this month (apply per-student discounts)
     batches = await db.batches.find({"user_id": user["_id"]}).to_list(500)
-    default_fees = {str(b["_id"]): b.get("monthly_fee", 0) or 0 for b in batches}
+    batch_by_id = {str(b["_id"]): b for b in batches}
     students = await db.students.find({"user_id": user["_id"]}).to_list(5000)
-    expected = 0
+    expected = 0.0
     for s in students:
-        sf = s.get("monthly_fee") if s.get("monthly_fee") not in (None, 0) else default_fees.get(s.get("batch_id"), 0)
-        expected += sf or 0
+        bd = compute_fee_breakdown(s, batch_by_id.get(s.get("batch_id"), {}))
+        expected += bd["final"]
 
     return {
         "total_students": total_students,
@@ -649,17 +683,34 @@ async def report_attendance_pdf(batch_id: str, start: str, end: str, user: dict 
 async def report_fees_pdf(batch_id: str, month: str, user: dict = Depends(get_current_user)):
     data = await list_fees(batch_id=batch_id, month=month, user=user)
     batch = data["batch"]
-    rows = [["#", "Student", "Code", "Expected (Rs.)", "Paid (Rs.)", "Status", "Paid On"]]
-    total_expected = 0
-    total_paid = 0
+    rows = [["#", "Student", "Code", "List Fee", "Discount", "Final Fee", "Paid", "Status"]]
+    total_list = 0.0
+    total_discount = 0.0
+    total_expected = 0.0
+    total_paid = 0.0
     for i, r in enumerate(data["rows"], 1):
         s = r["student"]
+        list_fee = float(r.get("list_fee", r["expected"]) or 0)
+        savings = float(r.get("discount_savings", 0) or 0)
+        pct = r.get("discount_percent") or 0
+        disc_label = "-"
+        if savings > 0:
+            disc_label = f"-Rs. {savings:.0f}" + (f" ({pct:.0f}%)" if pct else "")
+        total_list += list_fee
+        total_discount += savings
         total_expected += r["expected"] or 0
         total_paid += r["paid"] or 0
-        rows.append([str(i), s.get("name", ""), s.get("student_code", ""),
-                     f"{r['expected']:.0f}", f"{r['paid']:.0f}",
-                     r["status"].title(), r.get("paid_on") or "-"])
-    rows.append(["", "TOTAL", "", f"{total_expected:.0f}", f"{total_paid:.0f}", "", ""])
+        rows.append([
+            str(i), s.get("name", ""), s.get("student_code", ""),
+            f"{list_fee:.0f}", disc_label, f"{r['expected']:.0f}",
+            f"{r['paid']:.0f}", r["status"].title(),
+        ])
+    rows.append([
+        "", "TOTAL", "",
+        f"{total_list:.0f}",
+        f"-Rs. {total_discount:.0f}" if total_discount > 0 else "-",
+        f"{total_expected:.0f}", f"{total_paid:.0f}", "",
+    ])
     pdf = _build_pdf(
         title=f"Fee Collection Report — {batch.get('name', '')}",
         subtitle=f"Month: {month}",

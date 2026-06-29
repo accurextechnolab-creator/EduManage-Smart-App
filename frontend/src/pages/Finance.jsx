@@ -70,6 +70,7 @@ Thank you!`;
 
   const totalPaid = data?.rows.reduce((s, r) => s + r.paid, 0) || 0;
   const totalExpected = data?.rows.reduce((s, r) => s + r.expected, 0) || 0;
+  const totalDiscount = data?.rows.reduce((s, r) => s + (r.discount_savings || 0), 0) || 0;
 
   const openPay = (r) => {
     setPayForm({
@@ -149,9 +150,14 @@ Thank you!`;
               <div className="text-[10px] uppercase tracking-wider text-edu-on-variant">Collected</div>
               <div className="text-[18px] font-bold text-[#15803d] tabular-nums">{inr(totalPaid)}</div>
             </div>
-            <div className="edu-card !p-3">
+            <div className="edu-card !p-3" data-testid="fees-summary-expected">
               <div className="text-[10px] uppercase tracking-wider text-edu-on-variant">Expected</div>
               <div className="text-[18px] font-bold tabular-nums">{inr(totalExpected)}</div>
+              {totalDiscount > 0 && (
+                <div className="text-[11px] text-[#15803d] mt-0.5 tabular-nums" data-testid="fees-summary-discount">
+                  after {inr(totalDiscount)} discount
+                </div>
+              )}
             </div>
             <div className="edu-card !p-3">
               <div className="text-[10px] uppercase tracking-wider text-edu-on-variant">Pending</div>
@@ -168,9 +174,29 @@ Thank you!`;
                   <div className="flex items-center gap-3 min-w-0">
                     <Initials name={r.student.name} />
                     <div className="min-w-0">
-                      <div className="font-semibold text-[15px] truncate">{r.student.name}</div>
+                      <div className="font-semibold text-[15px] truncate flex items-center gap-2">
+                        {r.student.name}
+                        {r.discount_savings > 0 && (
+                          <span className="chip-success !px-2 !py-0 text-[10px]"
+                                data-testid={`fee-discount-chip-${r.student.id}`}
+                                title={r.discount_reason || "Discount applied"}>
+                            {r.discount_percent > 0
+                              ? `${Math.round(r.discount_percent)}% off`
+                              : `${inr(r.discount_savings)} off`}
+                          </span>
+                        )}
+                      </div>
                       <div className="text-[12px] text-edu-on-variant">
-                        Expected <span className="tabular-nums">{inr(r.expected)}</span>
+                        {r.discount_savings > 0 ? (
+                          <>
+                            <span className="line-through tabular-nums opacity-70">{inr(r.list_fee)}</span>
+                            {" → "}
+                            <span className="tabular-nums font-semibold text-edu-on">{inr(r.expected)}</span>
+                            {r.discount_reason && <span className="ml-1 opacity-80">· {r.discount_reason}</span>}
+                          </>
+                        ) : (
+                          <>Expected <span className="tabular-nums">{inr(r.expected)}</span></>
+                        )}
                         {r.paid > 0 && <> · Paid <span className="tabular-nums">{inr(r.paid)}</span> on {r.paid_on}</>}
                       </div>
                     </div>

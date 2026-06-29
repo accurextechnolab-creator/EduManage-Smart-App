@@ -838,3 +838,198 @@ class TestYearOverYearReports:
             assert ds["deltas"]["fees_pct"] is None
         finally:
             admin_client.delete(f"{API}/batches/{bid}")
+
+
+
+# ---------- Iteration 6: Per-student fee discount ----------
+class TestStudentDiscounts:
+    """Verify discount_amount / discount_percent / discount_reason flow end-to-end."""
+
+    def test_create_student_with_discount_fields(self, admin_client):
+        b = admin_client.post(f"{API}/batches", json={
+            "name": f"TEST_Disc_{uuid.uuid4().hex[:6]}", "subject": "S", "monthly_fee": 2000
+        }).json()
+        bid = b["id"]
+        try:
+            r = admin_client.post(f"{API}/batches/{bid}/students", json={
+                "name": "TEST_DiscStu",
+                "discount_amount": 300,
+                "discount_percent": 10,
+                "discount_reason": "Sibling",
+            })
+            assert r.status_code == 200, r.text
+            sid = r.json()["id"]
+            # GET back
+            r2 = admin_client.get(f"{API}/students/{sid}")
+            assert r2.status_code == 200
+            s = r2.json()["student"]
+            assert s["discount_amount"] == 300
+            assert s["discount_percent"] == 10
+            assert s["discount_reason"] == "Sibling"
+        finally:
+            admin_client.delete(f"{API}/batches/{bid}")
+
+    def test_put_student_persists_discount(self, admin_client):
+        b = admin_client.post(f"{API}/batches", json={
+            "name": f"TEST_DiscPut_{uuid.uuid4().hex[:6]}", "subject": "S", "monthly_fee": 2000
+        }).json()
+        bid = b["id"]
+        try:
+            s = admin_client.post(f"{API}/batches/{bid}/students", json={"name": "X"}).json()
+            sid = s["id"]
+            r = admin_client.put(f"{API}/students/{sid}", json={
+                "name": "X",
+                "discount_amount": 0,
+                "discount_percent": 20,
+                "discount_reason": "Scholarship",
+            })
+            assert r.status_code == 200
+            r2 = admin_client.get(f"{API}/students/{sid}")
+            s2 = r2.json()["student"]
+            assert s2["discount_percent"] == 20
+            assert s2["discount_reason"] == "Scholarship"
+            assert s2["discount_amount"] == 0
+        finally:
+            admin_client.delete(f"{API}/batches/{bid}")
+
+    def test_fees_math_amount_plus_percent(self, admin_client):
+        """batch=2000, no override, amt=300 + pct=10 → final=1500"""
+        b = admin_client.post(f"{API}/batches", json={
+            "name": f"TEST_FeeMath_{uuid.uuid4().hex[:6]}", "subject": "S", "monthly_fee": 2000
+        }).json()
+        bid = b["id"]
+        try:
+            s = admin_client.post(f"{API}/batches/{bid}/students", json={
+                "name": "Stu", "discount_amount": 300, "discount_percent": 10,
+                "discount_reason": "Sibling",
+            }).json()
+            sid = s["id"]
+            month = "2026-01"
+            r = admin_client.get(f"{API}/fees", params={"batch_id": bid, "month": month})
+            row = [x for x in r.json()["rows"] if x["student"]["id"] == sid][0]
+            assert row["list_fee"] == 2000
+            assert row["discount_amount"] == 300
+            assert row["discount_percent"] == 10
+            assert row["discount_reason"] == "Sibling"
+            assert row["expected"] == 1500
+            assert row["discount_savings"] == 500
+        finally:
+            admin_client.delete(f"{API}/batches/{bid}")
+
+    def test_fees_math_override_with_pct(self, admin_client):
+        """batch=2000, override=2750, pct=20 → list=2750, final=2200"""
+        b = admin_client.post(f"{API}/batches", json={
+            "name": f"TEST_FeeOvr_{uuid.uuid4().hex[:6]}", "subject": "S", "monthly_fee": 2000
+        }).json()
+        bid = b["id"]
+        try:
+            s = admin_client.post(f"{API}/batches/{bid}/students", json={
+                "name": "Stu", "monthly_fee": 2750,
+                "discount_amount": 0, "discount_percent": 20,
+            }).json()
+            sid = s["id"]
+            r = admin_client.get(f"{API}/fees", params={"batch_id": bid, "month": "2026-02"})
+            row = [x for x in r.json()["rows"] if x["student"]["id"] == sid][0]
+            assert row["list_fee"] == 2750
+            assert row["expected"] == 2200
+            assert row["discount_savings"] == 550
+        finally:
+            admin_client.delete(f"{API}/batches/{bid}")
+
+    def test_fees_clamps_at_zero(self, admin_client):
+        """disc_amt=10000 on base=2000 → final=0"""
+        b = admin_client.post(f"{API}/batches", json={
+            "name": f"TEST_Clamp_{uuid.uuid4().hex[:6]}", "subject": "S", "monthly_fee": 2000
+        }).json()
+        bid = b["id"]
+        try:
+            s = admin_client.post(f"{API}/batches/{bid}/students", json={
+                "name": "Stu", "discount_amount": 10000,
+            }).json()
+            sid = s["id"]
+            r = admin_client.get(f"{API}/fees", params={"batch_id": bid, "month": "2026-03"})
+            row = [x for x in r.json()["rows"] if x["student"]["id"] == sid][0]
+            assert row["expected"] == 0
+            assert row["list_fee"] == 2000
+        finally:
+            admin_client.delete(f"{API}/batches/{bid}")
+
+    def test_student_history_includes_discount(self, admin_client):
+        b = admin_client.post(f"{API}/batches", json={
+            "name": f"TEST_HistDisc_{uuid.uuid4().hex[:6]}", "subject": "S", "monthly_fee": 2000
+        }).json()
+        bid = b["id"]
+        try:
+            s = admin_client.post(f"{API}/batches/{bid}/students", json={
+                "name": "Stu", "discount_amount": 300, "discount_percent": 10,
+                "discount_reason": "Sibling",
+            }).json()
+            sid = s["id"]
+            r = admin_client.get(f"{API}/students/{sid}/history")
+            assert r.status_code == 200
+            h = r.json()
+            assert h["expected_monthly_fee"] == 1500
+            assert h["list_monthly_fee"] == 2000
+            assert h["discount_amount"] == 300
+            assert h["discount_percent"] == 10
+            assert h["discount_reason"] == "Sibling"
+            assert h["discount_savings"] == 500
+        finally:
+            admin_client.delete(f"{API}/batches/{bid}")
+
+    def test_dashboard_stats_uses_discounted_total(self, admin_client):
+        """A (no disc) + B (amt=200) in batch fee=1000 → fees_expected delta = 1800."""
+        b = admin_client.post(f"{API}/batches", json={
+            "name": f"TEST_DashDisc_{uuid.uuid4().hex[:6]}", "subject": "S", "monthly_fee": 1000
+        }).json()
+        bid = b["id"]
+        try:
+            base_stats = admin_client.get(f"{API}/dashboard/stats").json()
+            base_expected = base_stats["fees_expected"]
+            admin_client.post(f"{API}/batches/{bid}/students", json={"name": "A"}).json()
+            admin_client.post(f"{API}/batches/{bid}/students", json={
+                "name": "B", "discount_amount": 200,
+            }).json()
+            new_stats = admin_client.get(f"{API}/dashboard/stats").json()
+            assert new_stats["fees_expected"] - base_expected == 1800.0
+        finally:
+            admin_client.delete(f"{API}/batches/{bid}")
+
+    def test_fees_pdf_has_new_columns(self, admin_client):
+        b = admin_client.post(f"{API}/batches", json={
+            "name": f"TEST_PdfDisc_{uuid.uuid4().hex[:6]}", "subject": "S", "monthly_fee": 2000
+        }).json()
+        bid = b["id"]
+        try:
+            admin_client.post(f"{API}/batches/{bid}/students", json={
+                "name": "Stu", "discount_amount": 300, "discount_percent": 10,
+                "discount_reason": "Sibling",
+            }).json()
+            r = admin_client.get(f"{API}/reports/fees.pdf", params={"batch_id": bid, "month": "2026-01"})
+            assert r.status_code == 200
+            assert r.headers.get("content-type", "").startswith("application/pdf")
+            assert r.content[:4] == b"%PDF"
+            assert len(r.content) > 1500
+        finally:
+            admin_client.delete(f"{API}/batches/{bid}")
+
+    def test_discount_isolation_across_users(self, admin_client, secondary_client):
+        b = admin_client.post(f"{API}/batches", json={
+            "name": f"TEST_DiscIso_{uuid.uuid4().hex[:6]}", "subject": "S", "monthly_fee": 1000
+        }).json()
+        bid = b["id"]
+        try:
+            s = admin_client.post(f"{API}/batches/{bid}/students", json={
+                "name": "Stu", "discount_amount": 200,
+            }).json()
+            sid = s["id"]
+            # secondary user cannot PUT
+            r = secondary_client.put(f"{API}/students/{sid}", json={
+                "name": "HACK", "discount_amount": 0,
+            })
+            assert r.status_code == 404
+            # secondary user cannot DELETE
+            r = secondary_client.delete(f"{API}/students/{sid}")
+            assert r.status_code == 404
+        finally:
+            admin_client.delete(f"{API}/batches/{bid}")

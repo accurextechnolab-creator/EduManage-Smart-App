@@ -32,7 +32,9 @@ export default function StudentProfile() {
 
   if (!data) return <Layout title="Loading…"><Loading /></Layout>;
 
-  const { student, batch, attendance_summary, attendance_records, fees, expected_monthly_fee, total_paid } = data;
+  const { student, batch, attendance_summary, attendance_records, fees, expected_monthly_fee, total_paid,
+          list_monthly_fee, discount_savings, discount_percent, discount_reason } = data;
+  const hasDiscount = (discount_savings || 0) > 0;
 
   const sendParentWhatsApp = () => {
     const phone = student.parent_phone || student.phone;
@@ -95,9 +97,19 @@ export default function StudentProfile() {
         <div className="edu-card">
           <div className="text-[11px] font-semibold uppercase tracking-wider text-edu-on-variant">Monthly fee</div>
           <div className="text-[28px] font-bold tabular-nums mt-1">{inr(expected_monthly_fee)}</div>
-          <div className="text-[12px] text-edu-on-variant mt-1">
-            {student.monthly_fee ? "Custom" : "From batch"}
-          </div>
+          {hasDiscount ? (
+            <div className="text-[12px] mt-1 flex items-center gap-1.5 flex-wrap" data-testid="profile-discount-line">
+              <span className="line-through text-edu-on-variant tabular-nums">{inr(list_monthly_fee)}</span>
+              <span className="chip-success !px-2 !py-0 text-[10px]">
+                {discount_percent > 0 ? `${Math.round(discount_percent)}% off` : `${inr(discount_savings)} off`}
+              </span>
+              {discount_reason && <span className="text-edu-on-variant truncate">{discount_reason}</span>}
+            </div>
+          ) : (
+            <div className="text-[12px] text-edu-on-variant mt-1">
+              {student.monthly_fee ? "Custom" : "From batch"}
+            </div>
+          )}
         </div>
         <div className="edu-card">
           <div className="text-[11px] font-semibold uppercase tracking-wider text-edu-on-variant">Total paid</div>
