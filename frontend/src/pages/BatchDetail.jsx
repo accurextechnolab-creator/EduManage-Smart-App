@@ -6,7 +6,7 @@ import { api, formatApiError, todayISO } from "@/lib/api";
 import Layout from "@/components/Layout";
 import { Initials, Loading } from "@/components/ui-edu";
 
-const blankStudent = { name: "", student_code: "", phone: "", parent_name: "", parent_phone: "", monthly_fee: 0, discount_amount: 0, discount_percent: 0, discount_reason: "", joining_month: "" };
+const blankStudent = { name: "", student_code: "", phone: "", parent_name: "", parent_phone: "", monthly_fee: 0, discount_amount: 0, discount_percent: 0, discount_reason: "", joining_date: "" };
 
 const DISCOUNT_REASONS = ["", "Sibling", "Scholarship", "Financial Aid", "Early Bird", "Referral", "Other"];
 
@@ -78,9 +78,14 @@ export default function BatchDetail() {
     setSaving(false);
   };
 
-  const openAdd = () => setModal({ mode: "add", ...blankStudent, joining_month: new Date().toISOString().slice(0, 7), reason_other: "" });
+  const openAdd = () => setModal({ mode: "add", ...blankStudent, joining_date: new Date().toISOString().slice(0, 10), reason_other: "" });
   const openEdit = (s) => {
     const reasonInList = DISCOUNT_REASONS.includes(s.discount_reason || "");
+    // Prefer joining_date; fall back to legacy joining_month + "-01"; finally created_at; finally today
+    const jd =
+      s.joining_date ||
+      (s.joining_month ? `${s.joining_month}-01` : "") ||
+      (s.created_at ? s.created_at.slice(0, 10) : new Date().toISOString().slice(0, 10));
     setModal({
       mode: "edit", id: s.id,
       name: s.name || "", student_code: s.student_code || "", phone: s.phone || "",
@@ -90,7 +95,7 @@ export default function BatchDetail() {
       discount_percent: s.discount_percent || 0,
       discount_reason: reasonInList ? (s.discount_reason || "") : "Other",
       reason_other: reasonInList ? "" : (s.discount_reason || ""),
-      joining_month: s.joining_month || (s.created_at ? s.created_at.slice(0, 7) : new Date().toISOString().slice(0, 7)),
+      joining_date: jd,
     });
   };
 
@@ -104,7 +109,7 @@ export default function BatchDetail() {
       discount_amount: Number(modal.discount_amount) || 0,
       discount_percent: Number(modal.discount_percent) || 0,
       discount_reason: reason || "",
-      joining_month: modal.joining_month || "",
+      joining_date: modal.joining_date || "",
     };
     try {
       if (modal.mode === "edit") {
@@ -294,10 +299,10 @@ export default function BatchDetail() {
                 </div>
               </div>
               <div>
-                <label className="edu-label">Joining month (for balance carry-forward)</label>
-                <input type="month" data-testid="student-joining-month-input"
-                       value={modal.joining_month || ""}
-                       onChange={(e) => setModal({ ...modal, joining_month: e.target.value })}
+                <label className="edu-label">Joining date</label>
+                <input type="date" data-testid="student-joining-date-input"
+                       value={modal.joining_date || ""}
+                       onChange={(e) => setModal({ ...modal, joining_date: e.target.value })}
                        className="edu-input" />
               </div>
               <div>

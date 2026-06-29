@@ -72,9 +72,15 @@ export default function Batches() {
       title="Batches"
       subtitle="Group your students by class, subject or session"
       action={
-        <button onClick={openNew} data-testid="batches-add-btn" className="btn-primary">
-          <Plus className="w-4 h-4" /> New Batch
-        </button>
+        <div className="flex items-center gap-2">
+          <Link to="/students/joining-dates" data-testid="batches-bulk-joining-link"
+                className="btn-ghost hidden sm:inline-flex">
+            Fix joining dates
+          </Link>
+          <button onClick={openNew} data-testid="batches-add-btn" className="btn-primary">
+            <Plus className="w-4 h-4" /> New Batch
+          </button>
+        </div>
       }
     >
       {batches === null ? <Loading /> : batches.length === 0 ? (

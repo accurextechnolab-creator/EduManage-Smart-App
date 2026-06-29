@@ -96,7 +96,17 @@ class StudentIn(BaseModel):
     discount_amount: Optional[float] = 0.0   # ₹ off per month
     discount_percent: Optional[float] = 0.0  # % off per month
     discount_reason: Optional[str] = ""      # e.g. Sibling, Scholarship, ...
-    joining_month: Optional[str] = ""        # YYYY-MM, for fee balance carry-forward
+    joining_date: Optional[str] = ""         # YYYY-MM-DD (preferred)
+    joining_month: Optional[str] = ""        # legacy YYYY-MM (kept for backward compat)
+
+
+class BulkJoiningDateUpdate(BaseModel):
+    id: str
+    joining_date: str  # YYYY-MM-DD
+
+
+class BulkJoiningDateIn(BaseModel):
+    updates: List[BulkJoiningDateUpdate]
 
 
 class AttendanceMark(BaseModel):
@@ -281,7 +291,12 @@ def months_between_inclusive(start_ym: str, end_ym: str) -> int:
 
 
 def _student_joining_month(student: dict) -> str:
-    """Resolve the effective joining month for a student. Falls back to created_at month."""
+    """Resolve the effective joining month (YYYY-MM) for a student.
+    Preference order: joining_date (date) → joining_month (legacy) → created_at month.
+    """
+    jd = (student.get("joining_date") or "").strip()
+    if jd and len(jd) >= 7:
+        return jd[:7]
     jm = (student.get("joining_month") or "").strip()
     if jm:
         return jm[:7]
@@ -401,6 +416,44 @@ async def delete_student(student_id: str, user: dict = Depends(get_current_user)
     await db.attendance.delete_many({"student_id": student_id, "user_id": user["_id"]})
     await db.fees.delete_many({"student_id": student_id, "user_id": user["_id"]})
     return {"ok": True}
+
+
+@api.get("/students/all")
+async def list_all_students(user: dict = Depends(get_current_user)):
+    """All students for this user, with batch info — used by the bulk joining-date editor."""
+    students = await db.students.find({"user_id": user["_id"]}).sort("name", 1).to_list(5000)
+    batches = await db.batches.find({"user_id": user["_id"]}).to_list(500)
+    batch_by_id = {str(b["_id"]): b for b in batches}
+    out = []
+    for s in students:
+        b = batch_by_id.get(s.get("batch_id"))
+        row = serialize_doc(s)
+        row["batch_name"] = b.get("name", "") if b else ""
+        row["batch_id"] = s.get("batch_id", "")
+        row["effective_joining_month"] = _student_joining_month(s)
+        out.append(row)
+    return out
+
+
+@api.post("/students/bulk-joining-dates")
+async def bulk_set_joining_dates(payload: BulkJoiningDateIn, user: dict = Depends(get_current_user)):
+    if not payload.updates:
+        return {"ok": True, "updated": 0}
+    updated = 0
+    for u in payload.updates:
+        # Only update if the student belongs to this user
+        oid = parse_oid(u.id)
+        # Validate the date format YYYY-MM-DD
+        jd = (u.joining_date or "").strip()
+        if not jd or len(jd) < 7:
+            continue
+        result = await db.students.update_one(
+            {"_id": oid, "user_id": user["_id"]},
+            {"$set": {"joining_date": jd[:10]}},
+        )
+        if result.modified_count:
+            updated += 1
+    return {"ok": True, "updated": updated}
 
 
 @api.get("/students/{student_id}")
