@@ -125,7 +125,7 @@ export default function Batches() {
 
       {open && (
         <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] grid place-items-center p-4">
-          <div className="bg-white rounded-edu w-full max-w-md p-6 reveal">
+          <div className="bg-white rounded-edu w-full max-w-md p-6 reveal max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-[18px] font-semibold">{editingId ? "Edit Batch" : "New Batch"}</h3>
               <button onClick={() => setOpen(false)} className="p-1 text-edu-on-variant" data-testid="batch-modal-close"><X className="w-5 h-5" /></button>
