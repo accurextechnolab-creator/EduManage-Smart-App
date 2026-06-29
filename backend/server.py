@@ -14,6 +14,7 @@ from typing import Optional, List, Annotated
 import bcrypt
 import jwt
 from bson import ObjectId
+from bson.errors import InvalidId
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
@@ -139,7 +140,6 @@ def create_access_token(user_id: str, email: str) -> str:
                "exp": now_utc() + timedelta(days=7), "type": "access"}
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
-
 async def get_current_user(request: Request) -> dict:
     token = request.cookies.get("access_token")
     if not token:
@@ -230,6 +230,14 @@ def require_owner(doc: dict, user_id: str):
         raise HTTPException(status_code=404, detail="Not found")
 
 
+def parse_oid(value: str) -> ObjectId:
+    """Defensive ObjectId parser: any malformed id returns 404 instead of 500."""
+    try:
+        return ObjectId(value)
+    except (InvalidId, TypeError, ValueError):
+        raise HTTPException(status_code=404, detail="Not found")
+
+
 # ---------- Batches ----------
 @api.get("/batches")
 async def list_batches(user: dict = Depends(get_current_user)):
@@ -254,25 +262,25 @@ async def create_batch(payload: BatchIn, user: dict = Depends(get_current_user))
 
 @api.get("/batches/{batch_id}")
 async def get_batch(batch_id: str, user: dict = Depends(get_current_user)):
-    doc = await db.batches.find_one({"_id": ObjectId(batch_id)})
+    doc = await db.batches.find_one({"_id": parse_oid(batch_id)})
     require_owner(doc, user["_id"])
     return serialize_doc(doc)
 
 
 @api.put("/batches/{batch_id}")
 async def update_batch(batch_id: str, payload: BatchIn, user: dict = Depends(get_current_user)):
-    doc = await db.batches.find_one({"_id": ObjectId(batch_id)})
+    doc = await db.batches.find_one({"_id": parse_oid(batch_id)})
     require_owner(doc, user["_id"])
-    await db.batches.update_one({"_id": ObjectId(batch_id)}, {"$set": payload.model_dump()})
-    new = await db.batches.find_one({"_id": ObjectId(batch_id)})
+    await db.batches.update_one({"_id": parse_oid(batch_id)}, {"$set": payload.model_dump()})
+    new = await db.batches.find_one({"_id": parse_oid(batch_id)})
     return serialize_doc(new)
 
 
 @api.delete("/batches/{batch_id}")
 async def delete_batch(batch_id: str, user: dict = Depends(get_current_user)):
-    doc = await db.batches.find_one({"_id": ObjectId(batch_id)})
+    doc = await db.batches.find_one({"_id": parse_oid(batch_id)})
     require_owner(doc, user["_id"])
-    await db.batches.delete_one({"_id": ObjectId(batch_id)})
+    await db.batches.delete_one({"_id": parse_oid(batch_id)})
     await db.students.delete_many({"batch_id": batch_id, "user_id": user["_id"]})
     await db.attendance.delete_many({"batch_id": batch_id, "user_id": user["_id"]})
     await db.fees.delete_many({"batch_id": batch_id, "user_id": user["_id"]})
@@ -282,7 +290,7 @@ async def delete_batch(batch_id: str, user: dict = Depends(get_current_user)):
 # ---------- Students ----------
 @api.get("/batches/{batch_id}/students")
 async def list_students(batch_id: str, user: dict = Depends(get_current_user)):
-    batch = await db.batches.find_one({"_id": ObjectId(batch_id)})
+    batch = await db.batches.find_one({"_id": parse_oid(batch_id)})
     require_owner(batch, user["_id"])
     docs = await db.students.find({"batch_id": batch_id, "user_id": user["_id"]}).sort("name", 1).to_list(1000)
     return [serialize_doc(d) for d in docs]
@@ -290,7 +298,7 @@ async def list_students(batch_id: str, user: dict = Depends(get_current_user)):
 
 @api.post("/batches/{batch_id}/students")
 async def add_student(batch_id: str, payload: StudentIn, user: dict = Depends(get_current_user)):
-    batch = await db.batches.find_one({"_id": ObjectId(batch_id)})
+    batch = await db.batches.find_one({"_id": parse_oid(batch_id)})
     require_owner(batch, user["_id"])
     doc = payload.model_dump()
     doc.update({
@@ -305,18 +313,18 @@ async def add_student(batch_id: str, payload: StudentIn, user: dict = Depends(ge
 
 @api.put("/students/{student_id}")
 async def update_student(student_id: str, payload: StudentIn, user: dict = Depends(get_current_user)):
-    s = await db.students.find_one({"_id": ObjectId(student_id)})
+    s = await db.students.find_one({"_id": parse_oid(student_id)})
     require_owner(s, user["_id"])
-    await db.students.update_one({"_id": ObjectId(student_id)}, {"$set": payload.model_dump()})
-    new = await db.students.find_one({"_id": ObjectId(student_id)})
+    await db.students.update_one({"_id": parse_oid(student_id)}, {"$set": payload.model_dump()})
+    new = await db.students.find_one({"_id": parse_oid(student_id)})
     return serialize_doc(new)
 
 
 @api.delete("/students/{student_id}")
 async def delete_student(student_id: str, user: dict = Depends(get_current_user)):
-    s = await db.students.find_one({"_id": ObjectId(student_id)})
+    s = await db.students.find_one({"_id": parse_oid(student_id)})
     require_owner(s, user["_id"])
-    await db.students.delete_one({"_id": ObjectId(student_id)})
+    await db.students.delete_one({"_id": parse_oid(student_id)})
     await db.attendance.delete_many({"student_id": student_id, "user_id": user["_id"]})
     await db.fees.delete_many({"student_id": student_id, "user_id": user["_id"]})
     return {"ok": True}
@@ -324,7 +332,7 @@ async def delete_student(student_id: str, user: dict = Depends(get_current_user)
 
 @api.get("/students/{student_id}")
 async def get_student(student_id: str, user: dict = Depends(get_current_user)):
-    s = await db.students.find_one({"_id": ObjectId(student_id)})
+    s = await db.students.find_one({"_id": parse_oid(student_id)})
     require_owner(s, user["_id"])
     batch = await db.batches.find_one({"_id": ObjectId(s["batch_id"])})
     return {"student": serialize_doc(s), "batch": serialize_doc(batch) if batch else None}
@@ -332,7 +340,7 @@ async def get_student(student_id: str, user: dict = Depends(get_current_user)):
 
 @api.get("/students/{student_id}/history")
 async def student_history(student_id: str, user: dict = Depends(get_current_user)):
-    s = await db.students.find_one({"_id": ObjectId(student_id)})
+    s = await db.students.find_one({"_id": parse_oid(student_id)})
     require_owner(s, user["_id"])
     batch = await db.batches.find_one({"_id": ObjectId(s["batch_id"])})
 
@@ -375,7 +383,7 @@ async def student_history(student_id: str, user: dict = Depends(get_current_user
 # ---------- Attendance ----------
 @api.get("/attendance")
 async def get_attendance(batch_id: str, date: str, user: dict = Depends(get_current_user)):
-    batch = await db.batches.find_one({"_id": ObjectId(batch_id)})
+    batch = await db.batches.find_one({"_id": parse_oid(batch_id)})
     require_owner(batch, user["_id"])
     students = await db.students.find({"batch_id": batch_id, "user_id": user["_id"]}).sort("name", 1).to_list(1000)
     records = await db.attendance.find({"batch_id": batch_id, "user_id": user["_id"], "date": date}).to_list(2000)
@@ -407,7 +415,7 @@ async def save_attendance(payload: AttendanceSaveIn, user: dict = Depends(get_cu
 @api.get("/attendance/summary")
 async def attendance_summary(batch_id: str, start: str, end: str, user: dict = Depends(get_current_user)):
     """Per-student summary between dates (inclusive)."""
-    batch = await db.batches.find_one({"_id": ObjectId(batch_id)})
+    batch = await db.batches.find_one({"_id": parse_oid(batch_id)})
     require_owner(batch, user["_id"])
     students = await db.students.find({"batch_id": batch_id, "user_id": user["_id"]}).sort("name", 1).to_list(1000)
     records = await db.attendance.find({
@@ -437,7 +445,7 @@ async def attendance_summary(batch_id: str, start: str, end: str, user: dict = D
 # ---------- Fees ----------
 @api.get("/fees")
 async def list_fees(batch_id: str, month: str, user: dict = Depends(get_current_user)):
-    batch = await db.batches.find_one({"_id": ObjectId(batch_id)})
+    batch = await db.batches.find_one({"_id": parse_oid(batch_id)})
     require_owner(batch, user["_id"])
     students = await db.students.find({"batch_id": batch_id, "user_id": user["_id"]}).sort("name", 1).to_list(1000)
     fees = await db.fees.find({"batch_id": batch_id, "user_id": user["_id"], "month": month}).to_list(2000)
@@ -478,7 +486,7 @@ async def pay_fee(payload: FeePayIn, user: dict = Depends(get_current_user)):
 
 @api.delete("/fees")
 async def unpay_fee(batch_id: str, student_id: str, month: str, user: dict = Depends(get_current_user)):
-    batch = await db.batches.find_one({"_id": ObjectId(batch_id)})
+    batch = await db.batches.find_one({"_id": parse_oid(batch_id)})
     require_owner(batch, user["_id"])
     await db.fees.delete_one({
         "user_id": user["_id"], "batch_id": batch_id,
@@ -508,18 +516,18 @@ async def add_expense(payload: ExpenseIn, user: dict = Depends(get_current_user)
 
 @api.put("/expenses/{eid}")
 async def update_expense(eid: str, payload: ExpenseIn, user: dict = Depends(get_current_user)):
-    e = await db.expenses.find_one({"_id": ObjectId(eid)})
+    e = await db.expenses.find_one({"_id": parse_oid(eid)})
     require_owner(e, user["_id"])
-    await db.expenses.update_one({"_id": ObjectId(eid)}, {"$set": payload.model_dump()})
-    new = await db.expenses.find_one({"_id": ObjectId(eid)})
+    await db.expenses.update_one({"_id": parse_oid(eid)}, {"$set": payload.model_dump()})
+    new = await db.expenses.find_one({"_id": parse_oid(eid)})
     return serialize_doc(new)
 
 
 @api.delete("/expenses/{eid}")
 async def delete_expense(eid: str, user: dict = Depends(get_current_user)):
-    e = await db.expenses.find_one({"_id": ObjectId(eid)})
+    e = await db.expenses.find_one({"_id": parse_oid(eid)})
     require_owner(e, user["_id"])
-    await db.expenses.delete_one({"_id": ObjectId(eid)})
+    await db.expenses.delete_one({"_id": parse_oid(eid)})
     return {"ok": True}
 
 
@@ -675,6 +683,112 @@ async def report_expenses_pdf(month: Optional[str] = None, user: dict = Depends(
         sections=[{"heading": "Expenses", "table": rows}],
     )
     return _pdf_response(f"expenses_{month or 'all'}.pdf", pdf)
+
+
+# ---------- Yearly Summary (P3.5) ----------
+async def _build_yearly_summary(user_id: str, year: int) -> dict:
+    months = [f"{year:04d}-{m:02d}" for m in range(1, 13)]
+
+    # Fees per month
+    fees_cur = await db.fees.find({"user_id": user_id, "month": {"$in": months}}).to_list(20000)
+    fees_by_month = {m: 0.0 for m in months}
+    for f in fees_cur:
+        fees_by_month[f["month"]] = fees_by_month.get(f["month"], 0.0) + float(f.get("amount", 0) or 0)
+
+    # Expenses per month (date is YYYY-MM-DD)
+    exp_cur = await db.expenses.find({
+        "user_id": user_id,
+        "date": {"$regex": f"^{year:04d}-"},
+    }).to_list(20000)
+    exp_by_month = {m: 0.0 for m in months}
+    for e in exp_cur:
+        m = (e.get("date") or "")[:7]
+        if m in exp_by_month:
+            exp_by_month[m] += float(e.get("amount", 0) or 0)
+
+    # Attendance per month (just totals)
+    att_cur = await db.attendance.find({
+        "user_id": user_id,
+        "date": {"$regex": f"^{year:04d}-"},
+    }).to_list(50000)
+    att_present = {m: 0 for m in months}
+    att_absent = {m: 0 for m in months}
+    for a in att_cur:
+        m = (a.get("date") or "")[:7]
+        if m not in att_present:
+            continue
+        if a.get("status") == "present":
+            att_present[m] += 1
+        elif a.get("status") == "absent":
+            att_absent[m] += 1
+
+    rows = []
+    total_fees = total_exp = 0.0
+    total_present = total_absent = 0
+    for m in months:
+        fees_m = fees_by_month[m]
+        exp_m = exp_by_month[m]
+        total_fees += fees_m
+        total_exp += exp_m
+        total_present += att_present[m]
+        total_absent += att_absent[m]
+        rows.append({
+            "month": m,
+            "fees": fees_m,
+            "expenses": exp_m,
+            "net": fees_m - exp_m,
+            "present": att_present[m],
+            "absent": att_absent[m],
+        })
+
+    return {
+        "year": year,
+        "rows": rows,
+        "totals": {
+            "fees": total_fees,
+            "expenses": total_exp,
+            "net": total_fees - total_exp,
+            "present": total_present,
+            "absent": total_absent,
+        },
+    }
+
+
+@api.get("/reports/yearly")
+async def report_yearly(year: int, user: dict = Depends(get_current_user)):
+    return await _build_yearly_summary(user["_id"], year)
+
+
+@api.get("/reports/yearly.pdf")
+async def report_yearly_pdf(year: int, user: dict = Depends(get_current_user)):
+    data = await _build_yearly_summary(user["_id"], year)
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    rows = [["Month", "Fees (Rs.)", "Expenses (Rs.)", "Net (Rs.)", "Present", "Absent"]]
+    for i, r in enumerate(data["rows"]):
+        rows.append([
+            f"{month_names[i]} {year}",
+            f"{r['fees']:.0f}",
+            f"{r['expenses']:.0f}",
+            f"{r['net']:.0f}",
+            str(r["present"]),
+            str(r["absent"]),
+        ])
+    t = data["totals"]
+    rows.append([
+        "TOTAL",
+        f"{t['fees']:.0f}",
+        f"{t['expenses']:.0f}",
+        f"{t['net']:.0f}",
+        str(t["present"]),
+        str(t["absent"]),
+    ])
+    pdf = _build_pdf(
+        title=f"Annual Summary — {year}",
+        subtitle=f"Fees collected, expenses and attendance for {year}",
+        sections=[{"heading": "Monthly Breakdown", "table": rows}],
+    )
+    return _pdf_response(f"annual_{year}.pdf", pdf)
 
 
 # ---------- Health ----------

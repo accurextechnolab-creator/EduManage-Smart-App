@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, X, CheckCircle2, XCircle, Trash2, IndianRupee, Receipt, MessageCircle } from "lucide-react";
+import { Plus, X, CheckCircle2, XCircle, Trash2, IndianRupee, Receipt, MessageCircle, Send, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { api, formatApiError, inr, currentMonth, todayISO } from "@/lib/api";
 import Layout from "@/components/Layout";
@@ -20,6 +20,8 @@ function FeesPanel() {
   const [data, setData] = useState(null);
   const [payOpen, setPayOpen] = useState(false);
   const [payForm, setPayForm] = useState({ student_id: "", student_name: "", amount: 0, paid_on: todayISO(), note: "" });
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkSent, setBulkSent] = useState({}); // { [student_id]: true }
 
   const formatMonthLong = (m) => {
     const [y, mm] = m.split("-").map(Number);
@@ -110,6 +112,20 @@ Thank you!`;
     return <div className="edu-card text-center py-10 text-edu-on-variant">Create a batch first to track fees.</div>;
   }
 
+  const unpaidWithPhone = (data?.rows || []).filter(
+    (r) => r.status !== "paid" && ((r.student.parent_phone || "").trim() || (r.student.phone || "").trim())
+  );
+  const unpaidNoPhone = (data?.rows || []).filter(
+    (r) => r.status !== "paid" && !((r.student.parent_phone || "").trim() || (r.student.phone || "").trim())
+  );
+
+  const openBulk = () => { setBulkSent({}); setBulkOpen(true); };
+
+  const sendBulkOne = (r) => {
+    sendReminder(r);
+    setBulkSent((prev) => ({ ...prev, [r.student.id]: true }));
+  };
+
   return (
     <>
       <div className="flex flex-col sm:flex-row gap-3 mb-4">
@@ -117,6 +133,13 @@ Thank you!`;
           {batches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
         </select>
         <MonthInput value={month} onChange={setMonth} testId="fees-month" />
+        {data && unpaidWithPhone.length > 0 && (
+          <button onClick={openBulk} data-testid="bulk-remind-btn"
+                  className="btn-primary sm:ml-auto"
+                  style={{ background: "#15803d" }}>
+            <Send className="w-4 h-4" /> Send {unpaidWithPhone.length} reminders
+          </button>
+        )}
       </div>
 
       {!data ? <Loading /> : (
@@ -213,6 +236,91 @@ Thank you!`;
                 <button type="submit" data-testid="pay-submit" className="btn-primary flex-1">Save payment</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {bulkOpen && (
+        <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] grid place-items-center p-4">
+          <div className="bg-white rounded-edu w-full max-w-lg p-6 reveal max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <h3 className="text-[18px] font-semibold">Send fee reminders</h3>
+                <p className="text-[12px] text-edu-on-variant mt-0.5">
+                  {Object.keys(bulkSent).length} of {unpaidWithPhone.length} sent · {formatMonthLong(month)}
+                </p>
+              </div>
+              <button onClick={() => setBulkOpen(false)} className="p-1 text-edu-on-variant" data-testid="bulk-close">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-[13px] text-edu-on-variant bg-edu-surface-low rounded-[6px] px-3 py-2 mb-3 mt-2">
+              Tap each parent to open WhatsApp with a pre-filled reminder. We can&apos;t auto-open many tabs (browsers block that), but each tap is one click away.
+            </p>
+
+            <div className="overflow-auto scrollbar-thin -mx-1 px-1 flex-1">
+              {unpaidWithPhone.length === 0 ? (
+                <div className="text-center py-6 text-edu-on-variant text-[14px]">
+                  No unpaid students with a phone number on file for this batch.
+                </div>
+              ) : (
+                <ul className="divide-y divide-edu-outline-variant">
+                  {unpaidWithPhone.map((r) => {
+                    const sent = !!bulkSent[r.student.id];
+                    const phone = r.student.parent_phone || r.student.phone;
+                    return (
+                      <li key={r.student.id} className="flex items-center justify-between gap-3 py-2.5"
+                          data-testid={`bulk-row-${r.student.id}`}>
+                        <div className="flex items-center gap-3 min-w-0">
+                          <Initials name={r.student.name} />
+                          <div className="min-w-0">
+                            <div className="font-semibold text-[14px] truncate">{r.student.name}</div>
+                            <div className="text-[12px] text-edu-on-variant truncate">
+                              {phone} · {inr(r.expected)} pending
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => sendBulkOne(r)}
+                          data-testid={`bulk-send-${r.student.id}`}
+                          className="inline-flex items-center justify-center gap-1.5 rounded-[6px] px-3 py-1.5 text-[12px] font-semibold transition-all active:scale-[0.98]"
+                          style={
+                            sent
+                              ? { background: "#ededf8", color: "#434654" }
+                              : { background: "rgba(22,163,74,0.15)", color: "#15803d" }
+                          }>
+                          {sent ? (<><CheckCircle2 className="w-3.5 h-3.5" /> Sent</>) : (<><MessageCircle className="w-3.5 h-3.5" /> Send</>)}
+                          {!sent && <ExternalLink className="w-3 h-3 opacity-60" />}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+
+              {unpaidNoPhone.length > 0 && (
+                <div className="mt-4 pt-3 border-t border-edu-outline-variant">
+                  <div className="text-[11px] font-semibold uppercase tracking-wider text-edu-on-variant mb-2">
+                    {unpaidNoPhone.length} unpaid · no phone on file
+                  </div>
+                  <ul className="space-y-1.5">
+                    {unpaidNoPhone.map((r) => (
+                      <li key={r.student.id} className="text-[13px] text-edu-on-variant flex items-center justify-between">
+                        <span>{r.student.name}</span>
+                        <span className="tabular-nums">{inr(r.expected)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-2 pt-4 mt-3 border-t border-edu-outline-variant">
+              <button onClick={() => setBulkOpen(false)} className="btn-ghost flex-1" data-testid="bulk-done">
+                Done
+              </button>
+            </div>
           </div>
         </div>
       )}

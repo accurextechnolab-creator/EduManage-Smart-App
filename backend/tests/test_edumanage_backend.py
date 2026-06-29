@@ -505,3 +505,158 @@ class TestReports:
         assert r.status_code == 200
         assert r.headers.get("content-type", "").startswith("application/pdf")
         assert r.content[:4] == b"%PDF"
+
+
+# ---------- Iteration 4: Defensive ObjectId parsing ----------
+class TestObjectIdHandling:
+    """Malformed ObjectId path params must return 404, not 500."""
+
+    def test_get_student_bad_id_returns_404(self, admin_client):
+        r = admin_client.get(f"{API}/students/not-a-real-id")
+        assert r.status_code == 404, f"Expected 404, got {r.status_code}: {r.text}"
+
+    def test_get_batch_bad_id_returns_404(self, admin_client):
+        r = admin_client.get(f"{API}/batches/12345")
+        assert r.status_code == 404, f"Expected 404, got {r.status_code}: {r.text}"
+
+    def test_delete_expense_bad_id_returns_404(self, admin_client):
+        r = admin_client.delete(f"{API}/expenses/badid")
+        assert r.status_code == 404, f"Expected 404, got {r.status_code}: {r.text}"
+
+    def test_put_student_garbage_id_not_500(self, admin_client):
+        r = admin_client.put(f"{API}/students/garbage", json={"name": "X"})
+        # 404 preferred; 422 acceptable if pydantic catches earlier; never 500
+        assert r.status_code in (404, 422), f"Got {r.status_code}: {r.text}"
+        assert r.status_code != 500
+
+    def test_get_student_history_bad_id_returns_404(self, admin_client):
+        r = admin_client.get(f"{API}/students/badformat/history")
+        assert r.status_code == 404
+
+    def test_delete_student_bad_id_returns_404(self, admin_client):
+        r = admin_client.delete(f"{API}/students/zzz")
+        assert r.status_code == 404
+
+    def test_valid_format_but_unknown_still_404(self, admin_client):
+        """Regression: valid 24-char hex ObjectId that doesn't exist returns 404."""
+        unknown = "0123456789abcdef01234567"
+        r = admin_client.get(f"{API}/students/{unknown}")
+        assert r.status_code == 404
+        r = admin_client.get(f"{API}/batches/{unknown}")
+        assert r.status_code == 404
+
+
+# ---------- Iteration 4: Yearly summary endpoint ----------
+class TestYearlyReports:
+    YEAR = 2031  # use a year unlikely to have any pre-existing data
+
+    def test_yearly_requires_auth(self):
+        r = requests.get(f"{API}/reports/yearly", params={"year": self.YEAR})
+        assert r.status_code == 401
+        r = requests.get(f"{API}/reports/yearly.pdf", params={"year": self.YEAR})
+        assert r.status_code == 401
+
+    def test_yearly_structure_and_sort(self, admin_client):
+        r = admin_client.get(f"{API}/reports/yearly", params={"year": self.YEAR})
+        assert r.status_code == 200
+        d = r.json()
+        assert d["year"] == self.YEAR
+        assert "rows" in d and "totals" in d
+        assert len(d["rows"]) == 12
+        # Sorted Jan..Dec
+        expected = [f"{self.YEAR}-{m:02d}" for m in range(1, 13)]
+        assert [row["month"] for row in d["rows"]] == expected
+        # net = fees - expenses per row
+        for row in d["rows"]:
+            for k in ["month", "fees", "expenses", "net", "present", "absent"]:
+                assert k in row
+            assert row["net"] == row["fees"] - row["expenses"]
+        # totals consistency
+        t = d["totals"]
+        assert t["net"] == t["fees"] - t["expenses"]
+        assert t["fees"] == sum(row["fees"] for row in d["rows"])
+        assert t["expenses"] == sum(row["expenses"] for row in d["rows"])
+
+    def test_yearly_aggregates_fees_and_expenses(self, admin_client):
+        year = self.YEAR
+        # Create batch + student
+        b = admin_client.post(f"{API}/batches", json={
+            "name": "TEST_YearlyBatch", "subject": "S", "monthly_fee": 1500
+        }).json()
+        bid = b["id"]
+        s = admin_client.post(f"{API}/batches/{bid}/students",
+                              json={"name": "TEST_YearlyStu"}).json()
+        sid = s["id"]
+        eid = None
+        try:
+            # Add expense dated 2031-03-15, amount 500
+            er = admin_client.post(f"{API}/expenses", json={
+                "title": "TEST_YearlyExp", "amount": 500,
+                "category": "Utilities", "date": f"{year}-03-15"
+            })
+            assert er.status_code == 200
+            eid = er.json()["id"]
+
+            # Pay fee for month YYYY-03 of 1500
+            fr = admin_client.post(f"{API}/fees/pay", json={
+                "student_id": sid, "batch_id": bid,
+                "month": f"{year}-03", "amount": 1500, "note": "TEST",
+            })
+            assert fr.status_code == 200
+
+            # Re-fetch yearly
+            r = admin_client.get(f"{API}/reports/yearly", params={"year": year})
+            assert r.status_code == 200
+            data = r.json()
+            mar = [row for row in data["rows"] if row["month"] == f"{year}-03"][0]
+            assert mar["fees"] == 1500
+            assert mar["expenses"] == 500
+            assert mar["net"] == 1000
+            # totals include them
+            assert data["totals"]["fees"] >= 1500
+            assert data["totals"]["expenses"] >= 500
+        finally:
+            if eid:
+                admin_client.delete(f"{API}/expenses/{eid}")
+            admin_client.delete(f"{API}/batches/{bid}")
+
+    def test_yearly_pdf(self, admin_client):
+        r = admin_client.get(f"{API}/reports/yearly.pdf", params={"year": self.YEAR})
+        assert r.status_code == 200
+        assert r.headers.get("content-type", "").startswith("application/pdf")
+        assert r.content[:4] == b"%PDF"
+        assert len(r.content) > 1024, f"PDF body too small: {len(r.content)} bytes"
+        # filename in disposition
+        disp = r.headers.get("content-disposition", "")
+        assert f"annual_{self.YEAR}.pdf" in disp
+
+    def test_yearly_user_isolation(self, admin_client, secondary_client):
+        year = 2032
+        # Admin creates a batch/student/fee in year 2032
+        b = admin_client.post(f"{API}/batches", json={
+            "name": "TEST_IsolY", "subject": "S", "monthly_fee": 2222
+        }).json()
+        bid = b["id"]
+        s = admin_client.post(f"{API}/batches/{bid}/students",
+                              json={"name": "TEST_IsolYStu"}).json()
+        sid = s["id"]
+        try:
+            admin_client.post(f"{API}/fees/pay", json={
+                "student_id": sid, "batch_id": bid,
+                "month": f"{year}-05", "amount": 2222, "note": "TEST",
+            })
+            # Admin should see 2222 in May
+            ra = admin_client.get(f"{API}/reports/yearly", params={"year": year})
+            may_a = [row for row in ra.json()["rows"] if row["month"] == f"{year}-05"][0]
+            assert may_a["fees"] >= 2222
+            # Secondary user should NOT see any fees from this admin's data
+            rs = secondary_client.get(f"{API}/reports/yearly", params={"year": year})
+            assert rs.status_code == 200
+            data_s = rs.json()
+            # Either no rows or zero in this month
+            may_s = [row for row in data_s["rows"] if row["month"] == f"{year}-05"][0]
+            assert may_s["fees"] == 0
+            # totals not poisoned
+            assert data_s["totals"]["fees"] == 0
+        finally:
+            admin_client.delete(f"{API}/batches/{bid}")

@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
-import { Download, Share2, FileText, CalendarRange, IndianRupee, Receipt } from "lucide-react";
+import { useEffect, useState, useCallback } from "react";
+import { Download, Share2, FileText, CalendarRange, IndianRupee, Receipt, BarChart3, TrendingUp, TrendingDown } from "lucide-react";
 import { toast } from "sonner";
-import { api, downloadPdf, formatApiError, todayISO, currentMonth } from "@/lib/api";
+import { api, downloadPdf, formatApiError, todayISO, currentMonth, inr } from "@/lib/api";
 import Layout from "@/components/Layout";
+import { Loading } from "@/components/ui-edu";
 
 function Section({ icon: Icon, title, subtitle, children }) {
   return (
@@ -33,6 +34,140 @@ const shareFile = async (blob, filename, title) => {
   } catch (_err) { /* ignore */ }
   return false;
 };
+
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function YearlySection() {
+  const [year, setYear] = useState(new Date().getFullYear());
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data } = await api.get("/reports/yearly", { params: { year } });
+      setData(data);
+    } catch (e) { toast.error(formatApiError(e)); }
+    setLoading(false);
+  }, [year]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const download = async () => {
+    try {
+      await downloadPdf("/reports/yearly.pdf", { year }, `annual_${year}.pdf`);
+      toast.success("PDF downloaded");
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  const share = async () => {
+    try {
+      const res = await api.get("/reports/yearly.pdf", { params: { year }, responseType: "blob" });
+      const blob = new Blob([res.data], { type: "application/pdf" });
+      const shared = await shareFile(blob, `annual_${year}.pdf`, `Annual Summary ${year}`);
+      if (!shared) {
+        const link = URL.createObjectURL(blob);
+        window.open(link, "_blank");
+        toast.info("Sharing not supported — opened in a new tab");
+      }
+    } catch (e) { toast.error(formatApiError(e)); }
+  };
+
+  const t = data?.totals;
+  const maxAbs = data ? Math.max(
+    1,
+    ...data.rows.map((r) => Math.max(Math.abs(r.fees), Math.abs(r.expenses)))
+  ) : 1;
+
+  return (
+    <div className="edu-card lg:col-span-2">
+      <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-[8px] bg-edu-primary-fixed text-edu-primary grid place-items-center">
+            <BarChart3 className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="font-semibold text-[16px]">Annual Summary &amp; Profit / Loss</div>
+            <div className="text-[12px] text-edu-on-variant">Month-by-month fees, expenses and net for the full year</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <select data-testid="yearly-year-select" value={year}
+                  onChange={(e) => setYear(Number(e.target.value))}
+                  className="edu-input !py-2 max-w-[110px]">
+            {Array.from({ length: 6 }, (_, i) => new Date().getFullYear() - 3 + i).map((y) =>
+              <option key={y} value={y}>{y}</option>)}
+          </select>
+          <button onClick={download} data-testid="yearly-download" className="btn-primary">
+            <Download className="w-4 h-4" /> PDF
+          </button>
+          <button onClick={share} data-testid="yearly-share" className="btn-secondary hidden sm:inline-flex">
+            <Share2 className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {loading || !data ? <Loading /> : (
+        <>
+          {/* P&L summary tiles */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+            <div className="bg-edu-surface-low rounded-edu p-3" data-testid="yearly-stat-fees">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-edu-on-variant flex items-center gap-1"><TrendingUp className="w-3 h-3" /> Fees</div>
+              <div className="text-[18px] font-bold tabular-nums text-[#15803d] mt-1">{inr(t.fees)}</div>
+            </div>
+            <div className="bg-edu-surface-low rounded-edu p-3" data-testid="yearly-stat-expenses">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-edu-on-variant flex items-center gap-1"><TrendingDown className="w-3 h-3" /> Expenses</div>
+              <div className="text-[18px] font-bold tabular-nums text-edu-error mt-1">{inr(t.expenses)}</div>
+            </div>
+            <div className="bg-edu-surface-low rounded-edu p-3" data-testid="yearly-stat-net">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-edu-on-variant">Net P&amp;L</div>
+              <div className={`text-[18px] font-bold tabular-nums mt-1 ${t.net >= 0 ? "text-[#15803d]" : "text-edu-error"}`}>{inr(t.net)}</div>
+            </div>
+            <div className="bg-edu-surface-low rounded-edu p-3" data-testid="yearly-stat-attendance">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-edu-on-variant">Class days</div>
+              <div className="text-[18px] font-bold tabular-nums mt-1">{t.present + t.absent}</div>
+              <div className="text-[10px] text-edu-on-variant mt-0.5">{t.present} present · {t.absent} absent</div>
+            </div>
+          </div>
+
+          {/* Monthly mini bar chart */}
+          <div className="space-y-1.5">
+            <div className="grid grid-cols-[64px_1fr_90px_90px_90px] gap-3 px-1 text-[10px] font-semibold uppercase tracking-wider text-edu-on-variant">
+              <div>Month</div>
+              <div>Fees / Expenses</div>
+              <div className="text-right">Fees</div>
+              <div className="text-right">Expenses</div>
+              <div className="text-right">Net</div>
+            </div>
+            {data.rows.map((r, i) => {
+              const feesPct = (r.fees / maxAbs) * 100;
+              const expPct = (r.expenses / maxAbs) * 100;
+              return (
+                <div key={r.month} data-testid={`yearly-row-${r.month}`}
+                     className="grid grid-cols-[64px_1fr_90px_90px_90px] gap-3 items-center px-1 py-1.5 hover:bg-edu-surface-low rounded-[6px]">
+                  <div className="text-[13px] font-semibold tabular-nums">{MONTH_NAMES[i]}</div>
+                  <div className="space-y-0.5">
+                    <div className="h-2 rounded-full bg-edu-surface-mid overflow-hidden">
+                      <div className="h-full bg-[#15803d] transition-all" style={{ width: `${feesPct}%` }} />
+                    </div>
+                    <div className="h-2 rounded-full bg-edu-surface-mid overflow-hidden">
+                      <div className="h-full bg-edu-error transition-all" style={{ width: `${expPct}%` }} />
+                    </div>
+                  </div>
+                  <div className="text-right text-[13px] tabular-nums text-[#15803d] font-semibold">{inr(r.fees)}</div>
+                  <div className="text-right text-[13px] tabular-nums text-edu-error font-semibold">{inr(r.expenses)}</div>
+                  <div className={`text-right text-[13px] tabular-nums font-bold ${r.net >= 0 ? "text-[#15803d]" : "text-edu-error"}`}>
+                    {inr(r.net)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 export default function Reports() {
   const [batches, setBatches] = useState([]);
@@ -93,7 +228,6 @@ export default function Reports() {
       const blob = new Blob([res.data], { type: "application/pdf" });
       const shared = await shareFile(blob, filename, title);
       if (!shared) {
-        // fallback: open in new tab
         const link = URL.createObjectURL(blob);
         window.open(link, "_blank");
         toast.info("Sharing not supported — opened in a new tab");
@@ -104,6 +238,8 @@ export default function Reports() {
   return (
     <Layout title="Reports" subtitle="Download or share PDF reports">
       <div className="grid lg:grid-cols-2 gap-5">
+        <YearlySection />
+
         <Section icon={CalendarRange} title="Attendance Report" subtitle="Per-student summary for a batch within a date range">
           <div className="space-y-3">
             <div>
@@ -161,7 +297,7 @@ export default function Reports() {
           </div>
         </Section>
 
-        <Section icon={FileText} title="How to share" subtitle="Tips for getting reports to parents & friends">
+        <Section icon={FileText} title="How to share" subtitle="Tips for getting reports to parents &amp; friends">
           <ul className="space-y-2 text-[14px] text-edu-on-variant list-disc pl-5">
             <li>Tap <span className="font-semibold text-edu-on">Share</span> on phones to send via WhatsApp, email or anywhere your device supports.</li>
             <li>On desktop, Share opens the PDF in a new tab — you can attach it to email or messaging.</li>

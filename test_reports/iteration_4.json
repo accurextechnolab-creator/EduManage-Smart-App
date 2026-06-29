@@ -1,0 +1,47 @@
+{
+  "summary": "Iteration 4 — (POLISH) defensive ObjectId 404, (P3.5) yearly summary endpoint + UI, (P2.5) bulk WhatsApp reminders — all verified end-to-end. Backend: 44/44 pytest tests pass (32 regression + 12 new: 7 for malformed ObjectId 404 handling, 5 for yearly endpoint/PDF/isolation). Frontend: bulk-remind-btn flow and yearly section flow both verified on the live preview URL with Playwright (PDF download succeeded, filename = annual_2026.pdf).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Finance > Fees toolbar", "issues": ["Button label uses plural unconditionally — reads 'Send 1 reminders' when N==1. Pluralize to 'Send 1 reminder' / 'Send N reminders' for polish. Non-blocking."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_edumanage_backend.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Optional polish) Pluralize bulk-remind-btn label: 'Send N reminder(s)' depending on N. Cosmetic only."
+  ],
+  "critical_code_review_comments": [
+    "parse_oid() correctly raises 404 on InvalidId/TypeError/ValueError — verified for GET /students, GET /batches, DELETE /expenses, PUT /students, DELETE /students, GET /students/{id}/history. Good.",
+    "_build_yearly_summary uses date {$regex: '^YYYY-'} on attendance + expenses which scans every doc — fine at current data volumes but consider an index on (user_id, date) and (user_id, month) once data grows. Carryover of similar concerns.",
+    "Yearly PDF currency uses 'Rs.' instead of the '₹' symbol used elsewhere in the app. Some PDF libraries don't embed the ₹ glyph by default; this looks intentional to avoid font issues. Acceptable.",
+    "Stale duplicate '# ---------- Mount routers + CORS ----------' header still present in server.py (~line 717) — carryover from iter 3, low priority cleanup.",
+    "Carryover: optional hardening to lock CORS allow_methods / allow_headers to an explicit list once API surface is finalized."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_edumanage_backend.py (added TestObjectIdHandling — 7 tests, and TestYearlyReports — 5 tests; total 44)"
+  ],
+  "success_rate": { "backend": "100% (44/44)", "frontend": "100% (P2.5 + P3.5 + regression flows verified)" },
+  "test_credentials": "admin@edumanage.app / admin123 (from /app/memory/test_credentials.md). Secondary user auto-registered per session.",
+  "seed_data_creation": "Backend tests create+cleanup TEST_* batches/students/expenses (cascade delete via batch). Yearly tests use years 2031/2032 to isolate from regression data. No persistent residue beyond the carryover TEST_UI_Batch_edited + TEST_UI_Stud from iter 3.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Pytest suite at /app/backend/tests/test_edumanage_backend.py now has 44 tests across TestCORS, TestHealth, TestAuth, TestProtected, TestBatches, TestIsolation, TestStudents, TestAttendance, TestFees, TestExpenses, TestDashboard, TestStudentProfileEndpoints, TestReports, TestObjectIdHandling, TestYearlyReports. Run: pytest /app/backend/tests/ -v --junitxml=/app/test_reports/pytest/pytest_results.xml. Note: yearly tests use years 2031/2032 to avoid clashing with seed data. For Playwright window.open inspection on the Finance bulk-send buttons, override window.open BEFORE clicking and read window.__opened[-1] — verified URL contains student name (TEST_UI_Stud), ₹2750 amount, and 'June 2026'. The default year in yearly-year-select on Reports is the current year (2026). PDF download via /api/reports/yearly.pdf returns Content-Disposition with filename annual_<year>.pdf.",
+  "verified_iter4_flows": {
+    "objectid_404": "GET /students/not-a-real-id, GET /batches/12345, DELETE /expenses/badid, PUT /students/garbage, GET /students/badformat/history, DELETE /students/zzz all return 404 (or 422 for PUT — pydantic-caught is acceptable per spec). Valid-format-but-unknown 24-char hex still returns 404.",
+    "yearly_endpoint_shape": "/api/reports/yearly?year=2031 returns {year, rows[12 sorted Jan..Dec with month=YYYY-MM, fees, expenses, net, present, absent], totals{fees, expenses, net, present, absent}}. net=fees-expenses verified row-by-row and in totals.",
+    "yearly_aggregation": "Adding expense 2031-03-15 ₹500 and fee 2031-03 ₹1500 → row 2031-03 shows fees=1500 expenses=500 net=1000; totals updated.",
+    "yearly_pdf": "GET /api/reports/yearly.pdf?year=2031 returns 200, content-type application/pdf, %PDF magic, body > 1KB, Content-Disposition with filename annual_2031.pdf.",
+    "yearly_auth": "401 without token. User isolation: admin's 2032-05 fee of ₹2222 not visible in secondary user's yearly (their row shows 0 and totals=0).",
+    "frontend_bulk_reminder_present": "data-testid=bulk-remind-btn appears in Finance>Fees toolbar with green bg rgb(21,128,61) when unpaid count with phone > 0. Reads 'Send 1 reminders' (cosmetic plural nit).",
+    "frontend_bulk_modal": "Clicking opens modal with bulk-row-{id}, bulk-send-{id}, bulk-close, bulk-done all present. Header counter starts '0 of N sent'.",
+    "frontend_bulk_send": "Clicking bulk-send-{id} → window.open invoked with https://wa.me/919876543210?text=... URL containing student name TEST_UI_Stud, amount ₹2750, month 'June 2026'. Button flips to 'Sent'. Counter updates to '1 of 1 sent'.",
+    "frontend_bulk_done": "Done button closes modal — modal DOM removed.",
+    "frontend_yearly_section": "Annual Summary & Profit/Loss card is the FIRST tile on /reports (full-width on lg). yearly-year-select defaults to 2026. All 4 stat tiles (fees/expenses/net/attendance) and all 12 yearly-row-2026-{01..12} render. Changing year reloads rows. yearly-download triggers a real PDF download with filename annual_2026.pdf."
+  },
+  "rca_of_the_issue": "N/A — iteration 4 is a polish + feature add. All new endpoints and UI flows pass tests on first run; no failures observed."
+}
