@@ -660,3 +660,181 @@ class TestYearlyReports:
             assert data_s["totals"]["fees"] == 0
         finally:
             admin_client.delete(f"{API}/batches/{bid}")
+
+
+
+# ---------- P5: Year-over-Year Comparison ----------
+class TestYearOverYearReports:
+    """Tests for /api/reports/yearly-compare and yearly-compare.pdf"""
+    CY = 2034  # current year (isolated)
+    PY = 2033  # previous year
+
+    def test_yoy_requires_auth(self):
+        r = requests.get(f"{API}/reports/yearly-compare", params={"year": self.CY})
+        assert r.status_code == 401
+        r = requests.get(f"{API}/reports/yearly-compare.pdf", params={"year": self.CY})
+        assert r.status_code == 401
+
+    def test_yoy_structure(self, admin_client):
+        r = admin_client.get(f"{API}/reports/yearly-compare", params={"year": self.CY})
+        assert r.status_code == 200
+        d = r.json()
+        # Top-level
+        assert d["current_year"] == self.CY
+        assert d["previous_year"] == self.CY - 1
+        for key in ["current", "previous", "deltas"]:
+            assert key in d
+        # 12 rows sorted Jan..Dec for each
+        for k in ["current", "previous"]:
+            assert "rows" in d[k]
+            assert "totals" in d[k]
+            assert len(d[k]["rows"]) == 12
+            expected_year = d[k]["year"]
+            expected_months = [f"{expected_year}-{m:02d}" for m in range(1, 13)]
+            assert [row["month"] for row in d[k]["rows"]] == expected_months
+        # deltas keys exist
+        for k in ["fees", "expenses", "net", "fees_pct", "expenses_pct", "net_pct"]:
+            assert k in d["deltas"]
+
+    def test_yoy_delta_math_and_pct(self, admin_client):
+        """Seed isolated data to verify deltas and pct math.
+
+        Use years 2028 (prev) and 2029 (curr) — isolated from any other tests.
+        prev fees=1000, curr fees=1500 -> fees_pct=50.0
+        prev expenses=2000, curr expenses=1000 -> expenses_pct=-50.0
+        """
+        py = 2028
+        cy = 2029
+        # Setup batch + student
+        b = admin_client.post(f"{API}/batches", json={
+            "name": "TEST_YoYBatch", "subject": "S", "monthly_fee": 1000
+        }).json()
+        bid = b["id"]
+        s = admin_client.post(f"{API}/batches/{bid}/students",
+                              json={"name": "TEST_YoYStu"}).json()
+        sid = s["id"]
+        exp_ids = []
+        try:
+            # PY fees=1000 (Jan)
+            admin_client.post(f"{API}/fees/pay", json={
+                "student_id": sid, "batch_id": bid,
+                "month": f"{py}-01", "amount": 1000, "note": "TEST",
+            })
+            # CY fees=1500 (Jan)
+            admin_client.post(f"{API}/fees/pay", json={
+                "student_id": sid, "batch_id": bid,
+                "month": f"{cy}-01", "amount": 1500, "note": "TEST",
+            })
+            # PY expenses=2000 (Feb)
+            er1 = admin_client.post(f"{API}/expenses", json={
+                "title": "TEST_YoYExpPY", "amount": 2000,
+                "category": "Misc", "date": f"{py}-02-10",
+            })
+            exp_ids.append(er1.json()["id"])
+            # CY expenses=1000 (Feb)
+            er2 = admin_client.post(f"{API}/expenses", json={
+                "title": "TEST_YoYExpCY", "amount": 1000,
+                "category": "Misc", "date": f"{cy}-02-10",
+            })
+            exp_ids.append(er2.json()["id"])
+
+            r = admin_client.get(f"{API}/reports/yearly-compare", params={"year": cy})
+            assert r.status_code == 200
+            d = r.json()
+            assert d["current_year"] == cy
+            assert d["previous_year"] == py
+
+            curr_totals = d["current"]["totals"]
+            prev_totals = d["previous"]["totals"]
+            assert prev_totals["fees"] == 1000
+            assert curr_totals["fees"] == 1500
+            assert prev_totals["expenses"] == 2000
+            assert curr_totals["expenses"] == 1000
+            assert prev_totals["net"] == 1000 - 2000  # -1000
+            assert curr_totals["net"] == 1500 - 1000  # 500
+
+            deltas = d["deltas"]
+            # Absolute deltas
+            assert deltas["fees"] == curr_totals["fees"] - prev_totals["fees"]
+            assert deltas["expenses"] == curr_totals["expenses"] - prev_totals["expenses"]
+            assert deltas["net"] == curr_totals["net"] - prev_totals["net"]
+            assert deltas["fees"] == 500
+            assert deltas["expenses"] == -1000
+            assert deltas["net"] == 1500
+            # Percent deltas
+            assert deltas["fees_pct"] == 50.0
+            assert deltas["expenses_pct"] == -50.0
+            # net_pct: (500 - (-1000)) / |-1000| * 100 = 1500/1000*100 = 150.0
+            assert deltas["net_pct"] == 150.0
+        finally:
+            for eid in exp_ids:
+                admin_client.delete(f"{API}/expenses/{eid}")
+            admin_client.delete(f"{API}/batches/{bid}")
+
+    def test_yoy_null_pct_when_prev_zero(self, admin_client):
+        """When previous year has zero fees/exp/net, _pct must be JSON null."""
+        # Use isolated year — no prev-year data exists for these years
+        cy = 2041
+        r = admin_client.get(f"{API}/reports/yearly-compare", params={"year": cy})
+        assert r.status_code == 200
+        d = r.json()
+        # prev should be all zeros
+        pt = d["previous"]["totals"]
+        assert pt["fees"] == 0
+        assert pt["expenses"] == 0
+        assert pt["net"] == 0
+        # pct fields should literally be None (JSON null)
+        assert d["deltas"]["fees_pct"] is None
+        assert d["deltas"]["expenses_pct"] is None
+        assert d["deltas"]["net_pct"] is None
+        # Verify raw JSON contains literal `null`
+        import json
+        raw = json.dumps(d["deltas"])
+        assert '"fees_pct": null' in raw
+        assert '"expenses_pct": null' in raw
+        assert '"net_pct": null' in raw
+
+    def test_yoy_pdf(self, admin_client):
+        cy = 2034
+        py = cy - 1
+        r = admin_client.get(f"{API}/reports/yearly-compare.pdf", params={"year": cy})
+        assert r.status_code == 200
+        assert r.headers.get("content-type", "").startswith("application/pdf")
+        assert r.content[:4] == b"%PDF"
+        assert len(r.content) > 1024, f"PDF body too small: {len(r.content)} bytes"
+        disp = r.headers.get("content-disposition", "")
+        assert f"yoy_{py}_vs_{cy}.pdf" in disp
+
+    def test_yoy_user_isolation(self, admin_client, secondary_client):
+        """Admin's prev-year fees must not appear in secondary user's YoY."""
+        cy = 2037
+        py = cy - 1
+        b = admin_client.post(f"{API}/batches", json={
+            "name": "TEST_YoYIsoBatch", "subject": "S", "monthly_fee": 4444
+        }).json()
+        bid = b["id"]
+        s = admin_client.post(f"{API}/batches/{bid}/students",
+                              json={"name": "TEST_YoYIsoStu"}).json()
+        sid = s["id"]
+        try:
+            # admin pays fees in PREV year
+            admin_client.post(f"{API}/fees/pay", json={
+                "student_id": sid, "batch_id": bid,
+                "month": f"{py}-06", "amount": 4444, "note": "TEST",
+            })
+            # admin sees this in their yoy.previous
+            ra = admin_client.get(f"{API}/reports/yearly-compare", params={"year": cy})
+            assert ra.status_code == 200
+            assert ra.json()["previous"]["totals"]["fees"] >= 4444
+
+            # secondary user must NOT see any of admin's fees
+            rs = secondary_client.get(f"{API}/reports/yearly-compare", params={"year": cy})
+            assert rs.status_code == 200
+            ds = rs.json()
+            assert ds["previous"]["totals"]["fees"] == 0
+            assert ds["current"]["totals"]["fees"] == 0
+            assert ds["deltas"]["fees"] == 0
+            # Per problem statement, when prev is 0 deltas pct must be null
+            assert ds["deltas"]["fees_pct"] is None
+        finally:
+            admin_client.delete(f"{API}/batches/{bid}")

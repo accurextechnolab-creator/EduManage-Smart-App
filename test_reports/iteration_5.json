@@ -1,0 +1,50 @@
+{
+  "summary": "Iteration 5 — P5: Year-over-Year Comparison. All backend endpoints (GET /api/reports/yearly-compare and /api/reports/yearly-compare.pdf) and the new YearOverYearSection on /reports are working end-to-end. Backend pytest: 50/50 pass (44 carryover + 6 new YoY tests). Frontend: yoy-section renders below YearlySection with all delta tiles, metric toggle, 12 monthly rows with correct bar colors (fees=green #15803d, expenses=red #ba1a1a), null pct → '—', and PDF download with filename pattern yoy_<prev>_vs_<curr>.pdf verified live on the preview URL.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Reports > YearOverYearSection year selector", "issues": ["yoy-year-select only exposes currentYear-3..currentYear+2 (6 years). For 2026 that's 2023..2028. Users cannot select 2029+ to inspect a future placeholder year, while the corresponding YearlySection allows any year via dropdown of same shape — consistency is fine, but consider expanding to currentYear+3 if a fresh year (e.g. Jan rollover) needs early viewing. Non-blocking."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_edumanage_backend.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Optional, non-blocking) Consider extending yoy-year-select option range from currentYear+2 to currentYear+3 so users can view a freshly-started year before its 12th month."
+  ],
+  "critical_code_review_comments": [
+    "_pct_change correctly returns Python None when previous == 0; FastAPI serializes to JSON literal null (verified raw JSON in test_yoy_null_pct_when_prev_zero). Good.",
+    "_build_yoy calls _build_yearly_summary twice in sequence (await). On large date ranges this could be parallelized with asyncio.gather(_build_yearly_summary(...year), _build_yearly_summary(...year-1)) — small perf optimization, not a bug.",
+    "PDF uses 'Rs.' instead of '₹' for font compatibility — consistent with existing yearly PDF. Good.",
+    "Filename pattern yoy_<prev>_vs_<curr>.pdf is computed correctly and verified end-to-end (Content-Disposition + browser download.suggested_filename).",
+    "Carryover from iter 3: duplicate '# ---------- Mount routers + CORS ----------' header still present (~line 920). Low priority cleanup.",
+    "DeltaTile uses amt === 0 branch for neutral grey color treatment — verified visually for fully-zero years (2026 vs 2025 with no seed data).",
+    "Year dropdown range constraint (currentYear-3..currentYear+2) prevents selecting 2029 from the UI even though the API supports it. Minor UX issue noted above."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_edumanage_backend.py (added TestYearOverYearReports — 6 new tests covering auth, structure (12 sorted rows + previous_year=year-1), delta math, percent math (50.0/-50.0/null), PDF + filename, and user isolation). Total 50 tests."
+  ],
+  "success_rate": { "backend": "100% (50/50 pytest)", "frontend": "100% (YoY card + delta tiles + metric toggle + 12 rows + PDF download + regression nav verified)" },
+  "test_credentials": "admin@edumanage.app / admin123 (from /app/memory/test_credentials.md). Secondary user auto-registered per session.",
+  "seed_data_creation": "Backend TestYearOverYearReports seeds isolated years 2028/2029 (delta math), 2033/2034 (PDF + structure), 2036/2037 (isolation), 2040/2041 (null pct). All seed data cleaned up via finally/cascade-delete on the parent batch. Carryover TEST_UI_Batch_edited + TEST_UI_Stud from iter 3 still present and used by the frontend Finance regression check.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Pytest at /app/backend/tests/test_edumanage_backend.py — 50 tests across TestCORS, TestHealth, TestAuth, TestProtected, TestBatches, TestIsolation, TestStudents, TestAttendance, TestFees, TestExpenses, TestDashboard, TestStudentProfileEndpoints, TestReports, TestObjectIdHandling, TestYearlyReports, TestYearOverYearReports. Run: pytest /app/backend/tests/ -v --junitxml=/app/test_reports/pytest/pytest_results.xml. For Playwright: yoy-year-select dropdown only contains [currentYear-3 .. currentYear+2] — to test against the seeded year 2029, hit the API directly or test via 2028 selection instead. To exercise the seeded delta math from the UI you need a year inside the dropdown; otherwise rely on direct API for verification. Iter 4 plural-reminder cosmetic nit was fixed (button now reads 'Send 1 reminder').",
+  "verified_iter5_flows": {
+    "yoy_endpoint_shape": "/api/reports/yearly-compare?year=2034 returns {current_year:2034, previous_year:2033, current:{rows[12 Jan..Dec],totals}, previous:{rows[12 Jan..Dec],totals}, deltas:{fees,expenses,net,fees_pct,expenses_pct,net_pct}}. Months sorted Jan..Dec verified.",
+    "yoy_delta_math": "Seeded prev_year(2028) fees=1000, expenses=2000 and curr_year(2029) fees=1500, expenses=1000. API returned deltas.fees=500, deltas.expenses=-1000, deltas.net=1500, deltas.fees_pct=50.0, deltas.expenses_pct=-50.0, deltas.net_pct=150.0. All math verified.",
+    "yoy_null_pct": "For year 2041 (no prev-year data), deltas.{fees_pct,expenses_pct,net_pct} are JSON literal null — verified via json.dumps containing '\"fees_pct\": null'.",
+    "yoy_pdf": "GET /api/reports/yearly-compare.pdf?year=2034 returns 200, application/pdf, %PDF magic, body >1KB, Content-Disposition contains yoy_2033_vs_2034.pdf. PDF has both 'Summary' and 'Monthly Breakdown' tables (by code inspection — Sections array passes two table dicts to _build_pdf).",
+    "yoy_auth_and_isolation": "401 without token on both endpoints. Admin's prev-year fees of 4444 do not appear in secondary user's yearly-compare totals (0).",
+    "frontend_yoy_section": "data-testid=yoy-section present and positioned BELOW yearly-row-2026 card on /reports (verified via getBoundingClientRect). Title 'Year-over-Year — 2025 vs 2026' with the year dropdown defaulting to 2026.",
+    "frontend_delta_tiles": "All three tiles (yoy-delta-fees, yoy-delta-expenses, yoy-delta-net) render currentValue, 'vs ₹previousValue' subtext, signed delta amount, and percentage. With no data both pct render as '(—)'. Tested 2027→2028 selection.",
+    "frontend_metric_toggle": "yoy-metric-fees is default-selected (bg-edu-primary class). Switching to yoy-metric-expenses changes Row 1 inner bar background to rgb(186, 26, 26). Switching to yoy-metric-net works without errors.",
+    "frontend_monthly_rows": "12 yoy-row-1..yoy-row-12 rendered. Each has 2 stacked bars (prev grey via bg-edu-outline-variant, curr in metric color). Δ column present.",
+    "frontend_pdf_download": "Clicking yoy-download for year=2028 triggers a real download with suggested_filename='yoy_2027_vs_2028.pdf'.",
+    "regression_other_pages": "Reports page still has Annual Summary (with all 12 yearly-row-2026-XX rows), Attendance Report, Fee Collection Report, Expense Report, and How-to-share cards. /batches and /finance pages load OK. Finance Fees page shows 'Send 1 reminder' button (iter-4 plural nit was fixed)."
+  },
+  "rca_of_the_issue": "N/A — iteration 5 is a clean feature addition. All new endpoints and UI flows pass tests on first run; no failures observed."
+}

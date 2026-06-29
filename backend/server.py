@@ -791,6 +791,95 @@ async def report_yearly_pdf(year: int, user: dict = Depends(get_current_user)):
     return _pdf_response(f"annual_{year}.pdf", pdf)
 
 
+# ---------- Year-over-Year Comparison (P5) ----------
+def _pct_change(prev: float, curr: float) -> float | None:
+    if prev == 0:
+        return None  # undefined; UI will render as "—"
+    return round((curr - prev) / abs(prev) * 100, 1)
+
+
+async def _build_yoy(user_id: str, year: int) -> dict:
+    curr = await _build_yearly_summary(user_id, year)
+    prev = await _build_yearly_summary(user_id, year - 1)
+    ct, pt = curr["totals"], prev["totals"]
+    deltas = {
+        "fees": ct["fees"] - pt["fees"],
+        "expenses": ct["expenses"] - pt["expenses"],
+        "net": ct["net"] - pt["net"],
+        "fees_pct": _pct_change(pt["fees"], ct["fees"]),
+        "expenses_pct": _pct_change(pt["expenses"], ct["expenses"]),
+        "net_pct": _pct_change(pt["net"], ct["net"]),
+    }
+    return {
+        "current_year": year,
+        "previous_year": year - 1,
+        "current": curr,
+        "previous": prev,
+        "deltas": deltas,
+    }
+
+
+@api.get("/reports/yearly-compare")
+async def report_yearly_compare(year: int, user: dict = Depends(get_current_user)):
+    return await _build_yoy(user["_id"], year)
+
+
+@api.get("/reports/yearly-compare.pdf")
+async def report_yearly_compare_pdf(year: int, user: dict = Depends(get_current_user)):
+    data = await _build_yoy(user["_id"], year)
+    cy, py = data["current_year"], data["previous_year"]
+    month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    rows = [[
+        "Month",
+        f"Fees {py}", f"Fees {cy}",
+        f"Exp {py}", f"Exp {cy}",
+        f"Net {py}", f"Net {cy}",
+    ]]
+    for i in range(12):
+        pr = data["previous"]["rows"][i]
+        cr = data["current"]["rows"][i]
+        rows.append([
+            month_names[i],
+            f"{pr['fees']:.0f}", f"{cr['fees']:.0f}",
+            f"{pr['expenses']:.0f}", f"{cr['expenses']:.0f}",
+            f"{pr['net']:.0f}", f"{cr['net']:.0f}",
+        ])
+    ct = data["current"]["totals"]
+    pt = data["previous"]["totals"]
+    rows.append([
+        "TOTAL",
+        f"{pt['fees']:.0f}", f"{ct['fees']:.0f}",
+        f"{pt['expenses']:.0f}", f"{ct['expenses']:.0f}",
+        f"{pt['net']:.0f}", f"{ct['net']:.0f}",
+    ])
+
+    def _fmt_delta(amt, pct):
+        sign = "+" if amt >= 0 else ""
+        pct_str = "—" if pct is None else f"{'+' if pct >= 0 else ''}{pct}%"
+        return f"{sign}Rs. {amt:.0f} ({pct_str})"
+
+    delta_rows = [
+        ["Metric", f"{py}", f"{cy}", "Change"],
+        ["Fees collected", f"{pt['fees']:.0f}", f"{ct['fees']:.0f}",
+         _fmt_delta(data["deltas"]["fees"], data["deltas"]["fees_pct"])],
+        ["Expenses", f"{pt['expenses']:.0f}", f"{ct['expenses']:.0f}",
+         _fmt_delta(data["deltas"]["expenses"], data["deltas"]["expenses_pct"])],
+        ["Net P&L", f"{pt['net']:.0f}", f"{ct['net']:.0f}",
+         _fmt_delta(data["deltas"]["net"], data["deltas"]["net_pct"])],
+    ]
+
+    pdf = _build_pdf(
+        title=f"Year-over-Year — {py} vs {cy}",
+        subtitle=f"Comparison of fees, expenses and net P&L between {py} and {cy}",
+        sections=[
+            {"heading": "Summary", "table": delta_rows},
+            {"heading": "Monthly Breakdown", "table": rows},
+        ],
+    )
+    return _pdf_response(f"yoy_{py}_vs_{cy}.pdf", pdf)
+
+
 # ---------- Health ----------
 @api.get("/")
 async def root():
